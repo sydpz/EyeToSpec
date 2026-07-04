@@ -10,6 +10,7 @@
 
 # OS / editor cruft
 .DS_Store
+._*
 Thumbs.db
 *.swp
 .vscode/
