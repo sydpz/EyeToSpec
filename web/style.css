@@ -295,6 +295,20 @@ code {
   width: 100%;
 }
 .insp-grid input:focus { outline: none; border-color: var(--accent); }
+.insp-flip { display: flex; gap: 0.55rem; margin-top: 0.7rem; }
+.flip-btn {
+  flex: 1;
+  font: inherit;
+  font-size: 0.8rem;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+  cursor: pointer;
+}
+.flip-btn:hover { border-color: var(--accent); }
+.flip-btn.on { background: var(--accent); border-color: var(--accent); color: #0b0d16; }
 .sidebar-hint { padding: 1.1rem 1.2rem; color: var(--text-faint); font-size: 0.8rem; line-height: 1.6; margin-top: auto; }
 
 /* toast */

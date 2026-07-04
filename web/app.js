@@ -64,6 +64,8 @@ async function init() {
       w: num(s.w, el.w, 0.2),
       h: num(s.h, el.h, null),   // may be null for aspect-locked images until measured
       rotation: num(s.rotation, el.rotation, 0),  // degrees, clockwise
+      flipH: bool(s.flipH, el.flipH, false),  // mirror left-right
+      flipV: bool(s.flipV, el.flipV, false),  // mirror top-bottom
     });
   });
 
@@ -77,6 +79,11 @@ async function init() {
 
 function num(...vals) {
   for (const v of vals) if (typeof v === 'number' && !isNaN(v)) return v;
+  return vals[vals.length - 1];
+}
+
+function bool(...vals) {
+  for (const v of vals) if (typeof v === 'boolean') return v;
   return vals[vals.length - 1];
 }
 
@@ -194,7 +201,10 @@ function placeNode(el) {
   node.style.height = pxH + 'px';
   node.style.left = (el.cx * CW - pxW / 2) + 'px';
   node.style.top = (el.cy * CH - pxH / 2) + 'px';
-  node.style.transform = el.rotation ? ('rotate(' + el.rotation + 'deg)') : '';
+  const tf = [];
+  if (el.rotation) tf.push('rotate(' + el.rotation + 'deg)');
+  if (el.flipH || el.flipV) tf.push('scale(' + (el.flipH ? -1 : 1) + ',' + (el.flipV ? -1 : 1) + ')');
+  node.style.transform = tf.join(' ');
 
   if (node.classList.contains('el-text')) {
     const fs = (parseFloat(node.dataset.fontSize) || 16) * (CW / (manifest.canvas.w || CW));
@@ -307,8 +317,20 @@ function updateInspector() {
       <label>w<input data-k="w" type="number" step="0.001" value="${el.w.toFixed(3)}"></label>
       <label>h<input data-k="h" type="number" step="0.001" value="${h.toFixed(3)}"></label>
       <label>rotation°<input data-k="rotation" type="number" step="1" value="${(el.rotation || 0).toFixed(1)}"></label>
+    </div>
+    <div class="insp-flip">
+      <button data-flip="flipH" class="flip-btn${el.flipH ? ' on' : ''}">↔ flip H</button>
+      <button data-flip="flipV" class="flip-btn${el.flipV ? ' on' : ''}">↕ flip V</button>
     </div>`;
   inspectorEl.querySelector('.insp-id').textContent = el.id;
+  inspectorEl.querySelectorAll('.flip-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const k = btn.dataset.flip;
+      el[k] = !el[k];
+      btn.classList.toggle('on', el[k]);
+      placeNode(el);
+    });
+  });
   inspectorEl.querySelectorAll('input').forEach(inp => {
     inp.addEventListener('change', () => {
       const k = inp.dataset.k;
@@ -337,6 +359,8 @@ function buildOutput() {
       cx: round(el.cx), cy: round(el.cy), w: round(el.w), h: round(h),
     };
     if (el.rotation) out[el.id].rotation = Math.round(el.rotation * 10) / 10;
+    if (el.flipH) out[el.id].flipH = true;
+    if (el.flipV) out[el.id].flipV = true;
   }
   return out;
 }

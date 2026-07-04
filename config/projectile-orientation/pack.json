@@ -1,0 +1,12 @@
+{
+  "name": "Projectile Orientation",
+  "description": "absolute-td 飞行投射物朝向基准。每个投射物旋转到「向上飞(-y)时的正确姿态」——拳套=拳背朝上、箭=箭头朝上、石子/口水=正面朝上。游戏按目标方向从这个「朝上基准」旋转发射，所以这里定的就是 0° 基准朝向。导出的 rotation 即每个投射物需要的朝向修正角。",
+  "canvas": { "w": 800, "h": 800 },
+  "background": null,
+  "elements": [
+    { "id": "proj-boxing-glove", "file": "proj-boxing-glove.webp", "cx": 0.25, "cy": 0.28, "w": 0.18, "rotation": 0 },
+    { "id": "proj-sky-arrow",    "file": "proj-sky-arrow.webp",    "cx": 0.72, "cy": 0.28, "w": 0.18, "rotation": 0 },
+    { "id": "proj-pebble",       "file": "proj-pebble.webp",       "cx": 0.25, "cy": 0.72, "w": 0.18, "rotation": 0 },
+    { "id": "proj-drool-spit",   "file": "proj-drool-spit.webp",   "cx": 0.72, "cy": 0.72, "w": 0.18, "rotation": 0 }
+  ]
+}
