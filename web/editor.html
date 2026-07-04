@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>EyeToSpec — Editor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="page-editor">
+  <header class="topbar editor-topbar">
+    <a class="back" href="index.html" title="Back to packs">‹</a>
+    <div class="editor-title">
+      <span id="pack-name" class="brand-name">Editor</span>
+      <span id="pack-id" class="pack-id"></span>
+    </div>
+    <div class="editor-actions">
+      <button id="reset-btn" class="btn btn-ghost" title="Reload seed positions from pack.json">Reset</button>
+      <button id="export-btn" class="btn btn-ghost" title="Show / copy the coordinate JSON">JSON</button>
+      <button id="save-btn" class="btn btn-primary" title="Write output/&lt;pack&gt;.json">💾 Save</button>
+    </div>
+  </header>
+
+  <div class="editor-body">
+    <div class="stage-wrap">
+      <div id="stage" class="stage">
+        <div id="canvas" class="canvas"></div>
+      </div>
+    </div>
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <h2>Elements</h2>
+        <ul id="element-list" class="element-list"></ul>
+      </div>
+      <div class="sidebar-section">
+        <h2>Selected</h2>
+        <div id="inspector" class="inspector">
+          <div class="inspector-empty">Click an element to inspect it.</div>
+        </div>
+      </div>
+      <div class="sidebar-hint">
+        Drag to move · drag the corner handle to resize · normalized 0–1 coords,
+        relative to the <span id="canvas-size"></span> canvas.
+      </div>
+    </aside>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <div id="json-modal" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <span>Exported coordinates</span>
+        <button id="copy-btn" class="btn btn-ghost">Copy</button>
+        <button id="close-modal" class="btn btn-ghost">Close</button>
+      </div>
+      <pre id="json-out" class="json-out"></pre>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

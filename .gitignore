@@ -1,0 +1,20 @@
+# EyeToSpec
+
+# Exported coordinates are user output, not source.
+# Keep the folder, ignore its contents.
+/output/*
+!/output/.gitkeep
+
+# Superpowers skill symlink (local dev tooling, not part of the project)
+/.trae/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]

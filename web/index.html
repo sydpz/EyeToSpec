@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>EyeToSpec</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="page-list">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">👁</span>
+      <span class="brand-name">EyeToSpec</span>
+    </div>
+    <div class="tagline">From your eye to a spec — drag it where it looks right, export exact coordinates.</div>
+  </header>
+
+  <main class="container">
+    <h1 class="section-title">Asset packs</h1>
+    <p class="section-hint">
+      Each pack is a folder in <code>config/</code> with a <code>pack.json</code>.
+      Pick one, drag its pieces into place, and export the coordinates.
+    </p>
+
+    <div id="packs" class="pack-grid" aria-live="polite">
+      <div class="empty">Loading…</div>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <span>Local tool · nothing leaves your machine</span>
+  </footer>
+
+  <script>
+    const grid = document.getElementById('packs');
+
+    function card(pack) {
+      const a = document.createElement('a');
+      a.className = 'pack-card';
+      a.href = 'editor.html?pack=' + encodeURIComponent(pack.id);
+      a.innerHTML = `
+        <div class="pack-card-top">
+          <span class="pack-name"></span>
+          ${pack.exported ? '<span class="badge">exported</span>' : ''}
+        </div>
+        <p class="pack-desc"></p>
+        <div class="pack-meta">
+          <span class="pack-id"></span>
+          <span class="pack-count">${pack.elementCount} elements</span>
+        </div>`;
+      a.querySelector('.pack-name').textContent = pack.name;
+      a.querySelector('.pack-desc').textContent = pack.description || '';
+      a.querySelector('.pack-id').textContent = pack.id;
+      return a;
+    }
+
+    fetch('/api/packs')
+      .then(r => r.json())
+      .then(data => {
+        grid.innerHTML = '';
+        if (!data.packs || data.packs.length === 0) {
+          grid.innerHTML = '<div class="empty">No packs found. Drop a folder with a <code>pack.json</code> into <code>config/</code> and refresh.</div>';
+          return;
+        }
+        data.packs.forEach(p => grid.appendChild(card(p)));
+      })
+      .catch(err => {
+        grid.innerHTML = '<div class="empty error">Failed to load packs: ' + err + '</div>';
+      });
+  </script>
+</body>
+</html>
