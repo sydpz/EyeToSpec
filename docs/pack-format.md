@@ -92,6 +92,25 @@ backing plate) — no image file. Renders as a labeled box you size freely in bo
 width and height. Optional `fill` + `alpha` (0..1) + `radius` (px) paint it in
 its real look instead of the generic placeholder.
 
+## Rotation and flip
+
+Any element can also carry an orientation. You set these in the editor (the top
+handle rotates; the ↔ / ↕ toggles in the inspector flip) — you rarely write them
+by hand — but they can seed a pack too:
+
+```json
+{ "id": "arrow", "file": "arrow.svg", "cx": 0.5, "cy": 0.5, "w": 0.2, "rotation": 90, "flipH": true }
+```
+
+- `rotation` — degrees clockwise. In the editor, dragging snaps to 15°; hold
+  **Shift** for free rotation.
+- `flipH` / `flipV` — mirror left↔right / top↔bottom.
+
+In the **export**, `rotation` is only written when non-zero and `flipH` / `flipV`
+only when `true`, so orientation-free layouts stay clean. The editor renders each
+element with `transform: rotate(<rotation>deg) scale(<flipH?-1:1>, <flipV?-1:1>)`
+around its center — match that when consuming the JSON to get the same result.
+
 ## Seeding from a previous export
 
 When you open a pack, EyeToSpec loads `output/<pack>.json` if it exists, so you

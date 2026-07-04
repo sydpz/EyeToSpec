@@ -12,8 +12,9 @@
   <a href="LICENSE">MIT</a>
 </p>
 
-<!-- Drop a demo GIF here: docs/media/demo.gif -->
-<p align="center"><em>(demo GIF — launch → drag → export)</em></p>
+<p align="center">
+  <img src="docs/media/demo.gif" alt="EyeToSpec demo — drag, rotate, flip, export" width="720">
+</p>
 
 ---
 
@@ -36,13 +37,13 @@ against — precisely, in one pass.
 No install, no build step. Just Python 3 (already on macOS and most Linux):
 
 ```bash
-git clone https://github.com/YOUR_NAME/EyeToSpec.git
+git clone https://github.com/sydpz/EyeToSpec.git
 cd EyeToSpec
 python3 serve.py
 ```
 
 Your browser opens to the pack list. Click **Search Home**, drag the logo,
-search bar, and buttons into place, then hit **💾 Save**. The coordinates land
+search bar, and button into place, then hit **💾 Save**. The coordinates land
 in `output/search-home.json`.
 
 That file is the whole point — feed it to your agent:
@@ -75,6 +76,24 @@ size at build time.
 
 Flat and literal: what you drag is exactly what lands in the JSON. No grouping,
 no folding, nothing to decode.
+
+### Rotation and flip
+
+Beyond position and size, each element can be **rotated** (drag the top handle)
+and **flipped** horizontally or vertically (the ↔ / ↕ toggles in the inspector).
+These only appear in the export when they're set, so simple layouts stay clean:
+
+```json
+{
+  "btn_search": { "cx": 0.3, "cy": 0.52, "w": 0.3, "rotation": 60, "flipH": true, "flipV": true }
+}
+```
+
+- `rotation` — degrees clockwise (drag snaps to 15°; hold **Shift** for free rotation).
+- `flipH` / `flipV` — mirror left↔right / top↔bottom. Only emitted when `true`.
+
+Flip matters when art has a direction: a sprite drawn facing right can't be
+*rotated* to face left without turning upside down — it has to be mirrored.
 
 ### Three kinds of element
 
@@ -117,6 +136,11 @@ python3 serve.py            # note the "phone" URL it prints
 
 Open that URL on your phone — drag and resize work with touch.
 
+> **Note:** the default `--host 0.0.0.0` exposes the server to everyone on your
+> local network (there's no auth — it's a personal dev tool). That's fine on a
+> home/office wifi; on an untrusted network use `--host 127.0.0.1` for local-only
+> access, or an SSH tunnel.
+
 ## Options
 
 ```bash
@@ -124,6 +148,12 @@ python3 serve.py --port 8771    # use a different port
 python3 serve.py --no-open      # don't auto-open the browser
 python3 serve.py --host 127.0.0.1   # local only (no phone access)
 ```
+
+## Reproducing the demo
+
+The GIF above is scripted, not hand-recorded — see
+[`docs/media/record-demo.js`](docs/media/record-demo.js) (Playwright + ffmpeg).
+It's dev-only tooling; the tool itself has zero runtime dependencies.
 
 ## License
 
