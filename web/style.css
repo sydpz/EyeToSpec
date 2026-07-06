@@ -413,3 +413,17 @@ code {
   .stage-wrap { flex: 1 1 auto; min-height: 0; padding: 4px; }
   .editor-actions .btn { padding: 0.5rem 0.7rem; }
 }
+
+/* ---- headless render mode (?render=1) — screenshot backend only ---------- */
+body.render-mode .topbar,
+body.render-mode .sidebar,
+body.render-mode .editor-actions { display: none !important; }
+body.render-mode .el .handle,
+body.render-mode .el .rot-handle { display: none !important; }
+body.render-mode .el { border-color: transparent !important; box-shadow: none !important; }
+body.render-mode .editor-body { padding: 0; }
+body.render-mode .stage-wrap { padding: 0; background: #fff; }
+/* Box placeholders (file=null, no text) shouldn't show their debug frame in a
+   clean preview; keep text/image elements as-is. */
+body.render-mode .el-box { background: transparent !important; border-color: transparent !important; }
+body.render-mode .el-box-label { opacity: 0.25; }

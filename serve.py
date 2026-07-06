@@ -19,11 +19,14 @@ Everything else (the drag surface, normalization, export) happens in the browser
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urlparse, parse_qs
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 CONFIG_DIR = os.path.join(ROOT, "config")
@@ -83,6 +86,50 @@ def read_manifest(pack_id):
 def is_safe_id(pack_id):
     """A pack id is a single directory name — reject anything with path parts."""
     return bool(pack_id) and "/" not in pack_id and "\\" not in pack_id and pack_id not in (".", "..")
+
+
+def find_chrome():
+    """Locate a headless-capable Chrome/Chromium binary for the screenshot API."""
+    for name in ("google-chrome", "chromium-browser", "chromium",
+                 "google-chrome-stable"):
+        p = shutil.which(name)
+        if p:
+            return p
+    mac = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    if os.path.isfile(mac):
+        return mac
+    return None
+
+
+def render_screenshot(port, pack_id, width, height):
+    """Headless-render editor.html?pack=<id>&render=1 and return PNG bytes.
+
+    Agent-only preview: the render-mode page hides all editor chrome, so this
+    captures a clean canvas. Waits on window.__ready via --virtual-time-budget."""
+    chrome = find_chrome()
+    if not chrome:
+        raise RuntimeError("no Chrome/Chromium found for --headless screenshot")
+    url = "http://127.0.0.1:%d/editor.html?pack=%s&render=1" % (port, pack_id)
+    tmpdir = tempfile.mkdtemp(prefix="e2s-shot-")
+    out = os.path.join(tmpdir, "shot.png")
+    profile = os.path.join(tmpdir, "profile")
+    try:
+        subprocess.run(
+            [chrome, "--headless", "--no-sandbox", "--disable-gpu",
+             "--disable-extensions", "--hide-scrollbars",
+             "--user-data-dir=" + profile,
+             "--window-size=%d,%d" % (width, height),
+             "--virtual-time-budget=4000",
+             "--screenshot=" + out, url],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=45, check=False,
+        )
+        if not os.path.isfile(out):
+            raise RuntimeError("chrome produced no screenshot")
+        with open(out, "rb") as f:
+            return f.read()
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -145,6 +192,25 @@ class Handler(BaseHTTPRequestHandler):
                 if abspath.startswith(pack_dir + os.sep):
                     return self.send_file(abspath)
             return self.send_json({"error": "not found"}, status=404)
+
+        # headless screenshot of the render-mode page (agent preview): returns PNG
+        if path.startswith("/api/screenshot/"):
+            pack_id = path[len("/api/screenshot/"):]
+            if not is_safe_id(pack_id):
+                return self.send_json({"error": "bad pack id"}, status=400)
+            if not os.path.isdir(os.path.join(CONFIG_DIR, pack_id)):
+                return self.send_json({"error": "pack not found"}, status=404)
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                width = max(200, min(2000, int(q.get("w", ["720"])[0])))
+                height = max(200, min(4000, int(q.get("h", ["1280"])[0])))
+            except ValueError:
+                width, height = 720, 1280
+            try:
+                png = render_screenshot(self.server.server_address[1], pack_id, width, height)
+                return self.send_bytes(png, "image/png")
+            except Exception as exc:  # noqa: BLE001
+                return self.send_json({"error": "screenshot failed: %s" % exc}, status=500)
 
         # existing export (so the editor can open on the last saved layout)
         if path.startswith("/api/output/"):
