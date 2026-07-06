@@ -11,6 +11,11 @@
 
 const qs = new URLSearchParams(location.search);
 const PACK_ID = qs.get('pack');
+// Headless RENDER mode (?render=1): hide all editor chrome (topbar/sidebar/
+// handles), draw only the canvas + artwork, and expose a `window.__ready` flag
+// once layout settles — so a server-side screenshot endpoint can capture a
+// clean preview. Purely for agents; the normal editor UI is unaffected.
+const RENDER_MODE = qs.get('render') === '1';
 
 const stageEl = document.getElementById('stage');
 const canvasEl = document.getElementById('canvas');
@@ -75,6 +80,20 @@ async function init() {
   renderList();
   window.addEventListener('resize', layoutStage);
   wireToolbar();
+
+  if (RENDER_MODE) {
+    // Strip editor chrome so only the canvas + artwork remain, then fit the
+    // canvas to the full viewport and flag readiness for the screenshot backend.
+    document.body.classList.add('render-mode');
+    // Re-fit after chrome is hidden (stage area changed) and after images load.
+    requestAnimationFrame(() => {
+      layoutStage();
+      const imgs = Array.from(document.images);
+      Promise.all(imgs.map(im => im.complete ? Promise.resolve()
+        : new Promise(r => { im.onload = im.onerror = r; })))
+        .then(() => { layoutStage(); setTimeout(() => { window.__ready = true; }, 120); });
+    });
+  }
 }
 
 function num(...vals) {
