@@ -383,19 +383,33 @@ code {
     border-top: 1px solid var(--border);
     max-height: 34vh;
   }
-  /* Elements need a bigger touch target on a phone. */
+  /* Elements need a bigger touch target on a phone, but handles must NOT all
+     show at once. On touch there is no real hover, so the old blanket opacity:1
+     lit every element's resize+rotate handles and buried the art. Show handles
+     only for the selected element (tap to select). */
   .handle {
     width: 22px; height: 22px;
     right: -12px; bottom: -12px;
-    opacity: 1;
+    opacity: 0;
   }
   .rot-handle {
     width: 22px; height: 22px;
     top: -40px; margin-left: -11px;
-    opacity: 1;
+    opacity: 0;
   }
+  /* Neutralize sticky :hover on touch; .selected is the single source of truth. */
+  .el:hover .handle, .el:hover .rot-handle { opacity: 0; }
+  .el.selected .handle, .el.selected .rot-handle { opacity: 1; }
   .rot-handle::before { top: 20px; height: 20px; }
   .el { border-width: 2px; }
   .sidebar-hint { display: none; }
+  /* Reclaim vertical space so the full 720x1280 canvas fits on screen: shrink
+     the top bar and the bottom sidebar strip, give the canvas the rest. */
+  .editor-topbar { padding: 0.3rem 0.6rem; }
+  .editor-title { font-size: 0.8rem; }
+  .editor-title .tagline { display: none; }
+  .editor-actions .btn { padding: 0.4rem 0.6rem; font-size: 0.8rem; }
+  .sidebar { max-height: 22vh; }
+  .stage-wrap { flex: 1 1 auto; min-height: 0; padding: 4px; }
   .editor-actions .btn { padding: 0.5rem 0.7rem; }
 }
