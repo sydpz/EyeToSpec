@@ -101,7 +101,7 @@ def find_chrome():
     return None
 
 
-def render_screenshot(port, pack_id, width, height, safe=None, capsule=None, baseline=None):
+def render_screenshot(port, pack_id, width, height, safe=None, capsule=None, baseline=None, line=None, min_h=None):
     """Headless-render editor.html?pack=<id>&render=1 and return PNG bytes.
 
     Agent-only preview: the render-mode page hides all editor chrome, so this
@@ -119,6 +119,10 @@ def render_screenshot(port, pack_id, width, height, safe=None, capsule=None, bas
         url += "&capsule=1"
     if baseline:
         url += "&baseline=" + quote(str(baseline))
+    if line:
+        url += "&line=" + quote(str(line))
+    if min_h:
+        url += "&minH=" + quote(str(min_h))
     tmpdir = tempfile.mkdtemp(prefix="e2s-shot-")
     out = os.path.join(tmpdir, "shot.png")
     profile = os.path.join(tmpdir, "profile")
@@ -218,8 +222,10 @@ class Handler(BaseHTTPRequestHandler):
             safe = q.get("safe", [None])[0]
             capsule = q.get("capsule", [None])[0]
             baseline = q.get("baseline", [None])[0]
+            line = q.get("line", [None])[0]
+            min_h = q.get("minH", [None])[0]
             try:
-                png = render_screenshot(self.server.server_address[1], pack_id, width, height, safe, capsule, baseline)
+                png = render_screenshot(self.server.server_address[1], pack_id, width, height, safe, capsule, baseline, line, min_h)
                 return self.send_bytes(png, "image/png")
             except Exception as exc:  # noqa: BLE001
                 return self.send_json({"error": "screenshot failed: %s" % exc}, status=500)

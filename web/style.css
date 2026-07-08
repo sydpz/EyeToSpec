@@ -262,7 +262,8 @@ code {
   color: var(--text-faint);
   margin-bottom: 5px;
 }
-.anchor-choices { display: flex; gap: 6px; }
+.anchor-choices { display: flex; gap: 6px; flex-wrap: wrap; }
+.anchor-choices .anchor-btn { flex: 1 1 40%; }
 .anchor-btn {
   flex: 1;
   font: inherit;

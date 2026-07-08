@@ -26,6 +26,21 @@ const SAFE = parseSafe(qs.get('safe'));
 // Rect is expressed on the 720-wide design basis, normalized to canvas here.
 // Absent → not drawn, editor unchanged.
 const CAPSULE = qs.get('capsule') === '1';
+// Baseline line semantics (?line=..): the draggable horizontal line means two
+// different things depending on the page, and must export different fields:
+//   bgAnchor (default) — foreground art pins to background art (battle fence↔barn,
+//              home hen↔nest). Exports anchorLine.cy.
+//   divider  — top of the elastic content zone (henhouse / shop). Below it,
+//              content uses min-height + scroll / stretch. Exports
+//              elasticZone.{topCy, minH}.
+// The two are NOT interchangeable; the implementer reads a different field.
+const LINE_KIND = qs.get('line') === 'divider' ? 'divider' : 'bgAnchor';
+// For divider lines: the elastic zone's min-height (fraction of screen height).
+// Below minH the zone scrolls; above it, items spread. ?minH=0.5 default 0.5.
+const ELASTIC_MIN_H = (() => {
+  const n = parseFloat(qs.get('minH'));
+  return Number.isFinite(n) ? n : 0.5;
+})();
 
 function parseSafe(raw) {
   if (!raw) return null;
@@ -324,7 +339,10 @@ function sizeAnchorLine() {
   if (!CH) return;
   anchorLineEl.style.top = (anchorCy * CH) + 'px';
   const lbl = anchorLineEl.querySelector('.anchor-label');
-  if (lbl) lbl.textContent = 'baseline cy=' + anchorCy.toFixed(3);
+  if (lbl) {
+    lbl.textContent = (LINE_KIND === 'divider' ? 'elastic-zone top cy=' : 'bg-anchor cy=')
+      + anchorCy.toFixed(3);
+  }
 }
 
 let anchorDrag = null;
@@ -560,7 +578,9 @@ function updateInspector() {
       <span class="insp-anchor-label">anchor</span>
       <div class="anchor-choices">
         <button data-anchor="baseline" class="anchor-btn${el.anchor === 'baseline' ? ' on' : ''}">baseline</button>
-        <button data-anchor="top" class="anchor-btn${el.anchor === 'top' ? ' on' : ''}">top (safe area)</button>
+        <button data-anchor="top" class="anchor-btn${el.anchor === 'top' ? ' on' : ''}">top</button>
+        <button data-anchor="center" class="anchor-btn${el.anchor === 'center' ? ' on' : ''}">center</button>
+        <button data-anchor="bottom" class="anchor-btn${el.anchor === 'bottom' ? ' on' : ''}">bottom</button>
       </div>
     </div>`;
   inspectorEl.querySelector('.insp-id').textContent = el.id;
@@ -613,10 +633,16 @@ function buildOutput() {
     if (el.flipV) out[el.id].flipV = true;
     if (el.anchor && el.anchor !== 'baseline') out[el.id].anchor = el.anchor;  // default baseline omitted
   }
-  // Baseline: exported at top level (a page property, not an element). Only
-  // present if this pack has one. cx/w span the full width by convention.
+  // The horizontal line is a page property (top level), and exports a DIFFERENT
+  // field per its kind (§ LINE_KIND):
+  //   bgAnchor → anchorLine.cy    (foreground pins to background art)
+  //   divider  → elasticZone.{topCy, minH}  (top of the scroll/stretch zone)
   if (anchorCy != null) {
-    out.anchorLine = { cx: 0.5, cy: round(anchorCy), w: 1, h: 0.04 };
+    if (LINE_KIND === 'divider') {
+      out.elasticZone = { topCy: round(anchorCy), minH: round(ELASTIC_MIN_H) };
+    } else {
+      out.anchorLine = { cx: 0.5, cy: round(anchorCy), w: 1, h: 0.04 };
+    }
   }
   return out;
 }

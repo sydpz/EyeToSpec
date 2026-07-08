@@ -40,10 +40,14 @@
       <div class="sidebar-hint">
         Drag to move · corner handle to resize · normalized 0–1 coords on the
         <span id="canvas-size"></span> canvas.<br><br>
-        <b>anchor</b>: per-element — <code>baseline</code> (moves with background)
-        or <code>top</code> (floats to safe area). <br>
-        <b>baseline line</b>: drag the blue line onto the reference row; exported
-        as <code>anchorLine</code>.<br>
+        <b>anchor</b>: per-element — <code>baseline</code> (moves w/ background),
+        <code>top</code> / <code>center</code> / <code>bottom</code> (floats to
+        that screen edge / safe area).<br>
+        <b>the blue line</b>: <code>?line=bgAnchor</code> (default) exports
+        <code>anchorLine.cy</code> — foreground pins to background art (battle
+        fence↔barn, home hen↔nest). <code>?line=divider&minH=0.5</code> exports
+        <code>elasticZone.{topCy,minH}</code> — top of the scroll/stretch zone
+        (henhouse, shop).<br>
         URL flags: <code>?safe=top:0.07,bottom:0.04</code> ·
         <code>?capsule=1</code> · <code>?baseline=0.5</code>
       </div>
