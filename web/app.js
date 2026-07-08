@@ -16,6 +16,32 @@ const PACK_ID = qs.get('pack');
 // once layout settles — so a server-side screenshot endpoint can capture a
 // clean preview. Purely for agents; the normal editor UI is unaffected.
 const RENDER_MODE = qs.get('render') === '1';
+// Safe-area overlay (?safe=top:0.07,bottom:0.04): draw translucent red bands over
+// the unsafe top/bottom strips and flag any element whose bounding box crosses a
+// safe line. Fractions are of canvas HEIGHT (top measured from the top edge,
+// bottom from the bottom edge). Absent → no overlay, editor unchanged.
+const SAFE = parseSafe(qs.get('safe'));
+// Menu-capsule forbidden zone (?capsule=1): draw the WeChat forward/close capsule
+// bounding rect (top-right, unmovable) so HUD elements can be dragged clear of it.
+// Rect is expressed on the 720-wide design basis, normalized to canvas here.
+// Absent → not drawn, editor unchanged.
+const CAPSULE = qs.get('capsule') === '1';
+
+function parseSafe(raw) {
+  if (!raw) return null;
+  const out = { top: 0, bottom: 0 };
+  for (const part of raw.split(',')) {
+    const [k, v] = part.split(':');
+    const n = parseFloat(v);
+    if ((k === 'top' || k === 'bottom') && Number.isFinite(n)) out[k] = n;
+  }
+  return (out.top > 0 || out.bottom > 0) ? out : null;
+}
+
+// Menu-capsule rect on the 720×1280 design basis (from wx.getMenuButtonBoundingClientRect
+// measurements): x 545..700, y 90..155. Normalized against a 720×1280 canvas so it
+// scales to whatever pack canvas is loaded. cx/cy are the rect's fractional edges.
+const CAPSULE_RECT_720 = { x0: 545, x1: 700, y0: 90, y1: 155, basisW: 720, basisH: 1280 };
 
 const stageEl = document.getElementById('stage');
 const canvasEl = document.getElementById('canvas');
@@ -28,6 +54,11 @@ let elements = [];        // working state: [{id, file, text, ..., cx, cy, w, h}
 let nodes = new Map();    // id -> DOM node
 let selectedId = null;
 let canvasAspect = 1;     // w / h of the pack canvas
+// Baseline (anchorLine): one draggable horizontal line per pack marking the
+// "reference object" row (barn's lower edge / candidate-deploy divider). Seeded
+// from a saved export or manifest.anchorLine; exported back as anchorLine.cy.
+let anchorCy = null;      // normalized 0..1, or null if this pack has no baseline
+let anchorLineEl = null;  // the DOM line node
 
 // ---------------------------------------------------------------------------
 // load
@@ -71,10 +102,24 @@ async function init() {
       rotation: num(s.rotation, el.rotation, 0),  // degrees, clockwise
       flipH: bool(s.flipH, el.flipH, false),  // mirror left-right
       flipV: bool(s.flipV, el.flipV, false),  // mirror top-bottom
+      // anchor: which reference an element is pinned to. "baseline" (default) =
+      // moves with the pack's baseline/background; "top" = floats to the safe-area
+      // top (HUD). Mirrors game-engine anchor systems (Unity RectTransform / Cocos
+      // Widget); we currently implement two of the values.
+      anchor: str(s.anchor, el.anchor, 'baseline'),
     });
   });
 
+  // Baseline seed: saved export wins, else manifest.anchorLine, else ?baseline=<cy>
+  // (lets a pack with no baseline yet start one, e.g. ?baseline=0.5), else none.
+  const baselineParam = parseFloat(qs.get('baseline'));
+  anchorCy = num(saved.anchorLine?.cy, manifest.anchorLine?.cy,
+                 Number.isFinite(baselineParam) ? baselineParam : null);
+
   applyCanvasBackground();
+  drawSafeBands();
+  drawCapsule();
+  drawAnchorLine();
   layoutStage();
   renderElements();
   renderList();
@@ -106,6 +151,11 @@ function bool(...vals) {
   return vals[vals.length - 1];
 }
 
+function str(...vals) {
+  for (const v of vals) if (typeof v === 'string' && v) return v;
+  return vals[vals.length - 1];
+}
+
 function applyCanvasBackground() {
   const bg = manifest.background;
   if (bg && bg.file) {
@@ -130,12 +180,176 @@ function layoutStage() {
   if (h > availH) { h = availH; w = h * canvasAspect; }
   canvasEl.style.width = w + 'px';
   canvasEl.style.height = h + 'px';
+  sizeSafeBands();
+  sizeCapsule();
+  sizeAnchorLine();
   // re-place nodes now that px size changed
   for (const el of elements) placeNode(el);
+  checkSafeViolations();
 }
 
 function canvasPx() {
   return { w: canvasEl.clientWidth, h: canvasEl.clientHeight };
+}
+
+// ---------------------------------------------------------------------------
+// safe-area overlay (?safe=top:..,bottom:..)
+// ---------------------------------------------------------------------------
+let safeBandTop = null;
+let safeBandBottom = null;
+
+// Create the two band elements once (idempotent). No-op when ?safe absent.
+function drawSafeBands() {
+  if (!SAFE) return;
+  const mk = (cls, labelText) => {
+    const band = document.createElement('div');
+    band.className = 'safe-band ' + cls;
+    const label = document.createElement('div');
+    label.className = 'safe-band-label';
+    label.textContent = labelText;
+    band.appendChild(label);
+    canvasEl.appendChild(band);
+    return band;
+  };
+  if (SAFE.top > 0) safeBandTop = mk('top', `unsafe top ${(SAFE.top * 100).toFixed(1)}%`);
+  if (SAFE.bottom > 0) safeBandBottom = mk('bottom', `unsafe bottom ${(SAFE.bottom * 100).toFixed(1)}%`);
+}
+
+// Size the bands to the live canvas px height (called from layoutStage).
+function sizeSafeBands() {
+  if (!SAFE) return;
+  const { h: CH } = canvasPx();
+  if (!CH) return;
+  if (safeBandTop) safeBandTop.style.height = (SAFE.top * CH) + 'px';
+  if (safeBandBottom) safeBandBottom.style.height = (SAFE.bottom * CH) + 'px';
+}
+
+// Flag any element whose bounding box crosses a safe line. Outlines the node red
+// and logs a warning (visible in the headless screenshot console too). Compares
+// in NORMALIZED cy±h/2 space so it's resolution-independent.
+function checkSafeViolations() {
+  if (!SAFE) return;
+  const violators = [];
+  for (const el of elements) {
+    const node = nodes.get(el.id);
+    if (!node) continue;
+    const { h: CH } = canvasPx();
+    // element's normalized vertical extent (top/bottom edge as fraction of height)
+    const halfH = (node.offsetHeight / 2) / (CH || 1);
+    const topEdge = el.cy - halfH;
+    const bottomEdge = el.cy + halfH;
+    const crossesTop = SAFE.top > 0 && topEdge < SAFE.top;
+    const crossesBottom = SAFE.bottom > 0 && bottomEdge > (1 - SAFE.bottom);
+    node.classList.toggle('safe-violation', crossesTop || crossesBottom);
+    if (crossesTop || crossesBottom) {
+      violators.push(`${el.id} (${crossesTop ? 'top' : ''}${crossesTop && crossesBottom ? '+' : ''}${crossesBottom ? 'bottom' : ''})`);
+    }
+  }
+  if (violators.length) {
+    console.warn(`[safe-area] ${violators.length} element(s) cross the safe line: ${violators.join(', ')}`);
+  } else {
+    console.log('[safe-area] all elements within safe area ✓');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// menu-capsule forbidden zone (?capsule=1)
+// ---------------------------------------------------------------------------
+let capsuleEl = null;
+
+// Normalized capsule rect for the CURRENT canvas aspect. The measured rect is on
+// a 720×1280 basis; we keep the fractional edges (x/720, y/1280) so the box scales.
+function capsuleFrac() {
+  const r = CAPSULE_RECT_720;
+  return {
+    left: r.x0 / r.basisW, right: r.x1 / r.basisW,
+    top: r.y0 / r.basisH, bottom: r.y1 / r.basisH,
+  };
+}
+
+function drawCapsule() {
+  if (!CAPSULE) return;
+  capsuleEl = document.createElement('div');
+  capsuleEl.className = 'capsule-zone';
+  const label = document.createElement('div');
+  label.className = 'capsule-label';
+  label.textContent = 'menu capsule';
+  capsuleEl.appendChild(label);
+  canvasEl.appendChild(capsuleEl);
+}
+
+function sizeCapsule() {
+  if (!capsuleEl) return;
+  const { w: CW, h: CH } = canvasPx();
+  if (!CW || !CH) return;
+  const f = capsuleFrac();
+  capsuleEl.style.left = (f.left * CW) + 'px';
+  capsuleEl.style.top = (f.top * CH) + 'px';
+  capsuleEl.style.width = ((f.right - f.left) * CW) + 'px';
+  capsuleEl.style.height = ((f.bottom - f.top) * CH) + 'px';
+}
+
+// Does an element's bounding box overlap the capsule rect? (normalized space)
+function overlapsCapsule(el, node) {
+  if (!CAPSULE) return false;
+  const { w: CW, h: CH } = canvasPx();
+  const halfW = (node.offsetWidth / 2) / (CW || 1);
+  const halfH = (node.offsetHeight / 2) / (CH || 1);
+  const f = capsuleFrac();
+  const l = el.cx - halfW, r = el.cx + halfW, t = el.cy - halfH, b = el.cy + halfH;
+  return !(r < f.left || l > f.right || b < f.top || t > f.bottom);
+}
+
+// ---------------------------------------------------------------------------
+// baseline / anchor line (draggable; exported as anchorLine.cy)
+// ---------------------------------------------------------------------------
+function drawAnchorLine() {
+  if (anchorCy == null) return;
+  anchorLineEl = document.createElement('div');
+  anchorLineEl.className = 'anchor-line';
+  const label = document.createElement('div');
+  label.className = 'anchor-label';
+  label.textContent = 'baseline';
+  const grip = document.createElement('div');
+  grip.className = 'anchor-grip';
+  anchorLineEl.appendChild(label);
+  anchorLineEl.appendChild(grip);
+  canvasEl.appendChild(anchorLineEl);
+  anchorLineEl.addEventListener('pointerdown', onAnchorDown);
+}
+
+function sizeAnchorLine() {
+  if (!anchorLineEl) return;
+  const { h: CH } = canvasPx();
+  if (!CH) return;
+  anchorLineEl.style.top = (anchorCy * CH) + 'px';
+  const lbl = anchorLineEl.querySelector('.anchor-label');
+  if (lbl) lbl.textContent = 'baseline cy=' + anchorCy.toFixed(3);
+}
+
+let anchorDrag = null;
+function onAnchorDown(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  anchorLineEl.setPointerCapture(e.pointerId);
+  anchorDrag = { pointerId: e.pointerId, startY: e.clientY, startCy: anchorCy, CH: canvasPx().h };
+  anchorLineEl.addEventListener('pointermove', onAnchorMove);
+  anchorLineEl.addEventListener('pointerup', onAnchorUp);
+  anchorLineEl.addEventListener('pointercancel', onAnchorUp);
+}
+function onAnchorMove(e) {
+  if (!anchorDrag) return;
+  const dy = (e.clientY - anchorDrag.startY) / anchorDrag.CH;
+  anchorCy = clamp(anchorDrag.startCy + dy, 0, 1);
+  sizeAnchorLine();
+}
+function onAnchorUp(e) {
+  if (!anchorDrag) return;
+  anchorLineEl.removeEventListener('pointermove', onAnchorMove);
+  anchorLineEl.removeEventListener('pointerup', onAnchorUp);
+  anchorLineEl.removeEventListener('pointercancel', onAnchorUp);
+  try { anchorLineEl.releasePointerCapture(anchorDrag.pointerId); } catch (e) {}
+  anchorDrag = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +361,7 @@ function renderElements() {
   for (const el of elements) {
     const node = document.createElement('div');
     node.className = 'el';
+    if (el.anchor === 'top') node.classList.add('is-hud');
     node.dataset.id = el.id;
 
     if (el.file) {
@@ -340,8 +555,24 @@ function updateInspector() {
     <div class="insp-flip">
       <button data-flip="flipH" class="flip-btn${el.flipH ? ' on' : ''}">↔ flip H</button>
       <button data-flip="flipV" class="flip-btn${el.flipV ? ' on' : ''}">↕ flip V</button>
+    </div>
+    <div class="insp-anchor">
+      <span class="insp-anchor-label">anchor</span>
+      <div class="anchor-choices">
+        <button data-anchor="baseline" class="anchor-btn${el.anchor === 'baseline' ? ' on' : ''}">baseline</button>
+        <button data-anchor="top" class="anchor-btn${el.anchor === 'top' ? ' on' : ''}">top (safe area)</button>
+      </div>
     </div>`;
   inspectorEl.querySelector('.insp-id').textContent = el.id;
+  inspectorEl.querySelectorAll('.anchor-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      el.anchor = btn.dataset.anchor;
+      inspectorEl.querySelectorAll('.anchor-btn').forEach(b =>
+        b.classList.toggle('on', b.dataset.anchor === el.anchor));
+      const node = nodes.get(el.id);
+      if (node) node.classList.toggle('is-hud', el.anchor === 'top');
+    });
+  });
   inspectorEl.querySelectorAll('.flip-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const k = btn.dataset.flip;
@@ -380,6 +611,12 @@ function buildOutput() {
     if (el.rotation) out[el.id].rotation = Math.round(el.rotation * 10) / 10;
     if (el.flipH) out[el.id].flipH = true;
     if (el.flipV) out[el.id].flipV = true;
+    if (el.anchor && el.anchor !== 'baseline') out[el.id].anchor = el.anchor;  // default baseline omitted
+  }
+  // Baseline: exported at top level (a page property, not an element). Only
+  // present if this pack has one. cx/w span the full width by convention.
+  if (anchorCy != null) {
+    out.anchorLine = { cx: 0.5, cy: round(anchorCy), w: 1, h: 0.04 };
   }
   return out;
 }

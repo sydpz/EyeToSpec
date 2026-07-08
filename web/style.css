@@ -166,6 +166,116 @@ code {
   background-repeat: no-repeat;
   background-position: center;
 }
+/* Safe-area overlay (?safe=top:..,bottom:..): a translucent red band over the
+ * unsafe top/bottom strips (notch / camera row / home indicator), a dashed line
+ * at each safe boundary, and a label. Purely a review aid; drawn above artwork
+ * but ignores pointer events so it never blocks dragging. */
+.safe-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  background: rgba(255, 60, 60, 0.16);
+  z-index: 50;
+}
+.safe-band.top { top: 0; border-bottom: 2px dashed rgba(255, 40, 40, 0.9); }
+.safe-band.bottom { bottom: 0; border-top: 2px dashed rgba(255, 40, 40, 0.9); }
+.safe-band-label {
+  position: absolute;
+  font: 600 11px/1.3 system-ui, sans-serif;
+  color: #fff;
+  background: rgba(220, 30, 30, 0.9);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.safe-band.top .safe-band-label { bottom: 3px; left: 6px; }
+.safe-band.bottom .safe-band-label { top: 3px; left: 6px; }
+/* An element whose bounding box crosses a safe line: outlined red so it stands
+ * out in both the live editor and the headless screenshot. */
+.el.safe-violation { outline: 3px solid rgba(255, 30, 30, 0.95); outline-offset: 1px; }
+
+/* --- menu-capsule forbidden zone (?capsule=1) -----------------------------
+ * WeChat's forward/close capsule sits top-right and is unmovable. Draw its
+ * bounding rect so HUD (anchor:top) elements can be dragged clear of it. */
+.capsule-zone {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(255, 170, 40, 0.18);
+  border: 2px dashed rgba(255, 150, 20, 0.9);
+  border-radius: 999px;
+  z-index: 51;
+}
+.capsule-label {
+  position: absolute;
+  bottom: -18px; right: 0;
+  font: 600 10px/1.3 system-ui, sans-serif;
+  color: #fff;
+  background: rgba(210, 130, 10, 0.92);
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+/* --- baseline / anchor line (draggable) -----------------------------------
+ * One horizontal line per pack marking the reference row (barn edge / divider).
+ * Dragged onto the reference object; exported as anchorLine.cy. */
+.anchor-line {
+  position: absolute;
+  left: 0; right: 0;
+  height: 0;
+  border-top: 2px solid rgba(80, 200, 255, 0.95);
+  cursor: ns-resize;
+  touch-action: none;
+  z-index: 52;
+}
+.anchor-line .anchor-grip {
+  position: absolute;
+  left: 50%; top: -9px;
+  width: 44px; height: 18px;
+  margin-left: -22px;
+  background: rgba(80, 200, 255, 0.95);
+  border-radius: 4px;
+  cursor: ns-resize;
+}
+.anchor-label {
+  position: absolute;
+  top: 3px; left: 6px;
+  font: 600 11px/1.3 system-ui, sans-serif;
+  color: #04212e;
+  background: rgba(80, 200, 255, 0.95);
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+/* HUD elements (anchor:top) get a subtle badge so their identity is visible
+ * while positioning. */
+.el.is-hud { outline: 2px dashed rgba(80, 200, 255, 0.7); outline-offset: 1px; }
+
+/* --- inspector anchor selector -------------------------------------------- */
+.insp-anchor { margin-top: 10px; }
+.insp-anchor-label {
+  display: block;
+  font: 600 10px/1.3 system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  margin-bottom: 5px;
+}
+.anchor-choices { display: flex; gap: 6px; }
+.anchor-btn {
+  flex: 1;
+  font: inherit;
+  font-size: 0.78rem;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.35rem 0.4rem;
+  cursor: pointer;
+}
+.anchor-btn:hover { border-color: var(--accent); }
+.anchor-btn.on { background: rgba(80, 200, 255, 0.9); border-color: rgba(80, 200, 255, 0.9); color: #04212e; }
 .canvas.checker {
   background-image:
     linear-gradient(45deg, #eceff3 25%, transparent 25%),

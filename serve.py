@@ -26,7 +26,7 @@ import tempfile
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlparse, parse_qs
+from urllib.parse import unquote, urlparse, parse_qs, quote
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 CONFIG_DIR = os.path.join(ROOT, "config")
@@ -101,15 +101,24 @@ def find_chrome():
     return None
 
 
-def render_screenshot(port, pack_id, width, height):
+def render_screenshot(port, pack_id, width, height, safe=None, capsule=None, baseline=None):
     """Headless-render editor.html?pack=<id>&render=1 and return PNG bytes.
 
     Agent-only preview: the render-mode page hides all editor chrome, so this
-    captures a clean canvas. Waits on window.__ready via --virtual-time-budget."""
+    captures a clean canvas. Waits on window.__ready via --virtual-time-budget.
+
+    `safe` (e.g. "top:0.07,bottom:0.04") is forwarded to the render page to draw
+    the safe-area overlay + flag any element crossing a safe line."""
     chrome = find_chrome()
     if not chrome:
         raise RuntimeError("no Chrome/Chromium found for --headless screenshot")
     url = "http://127.0.0.1:%d/editor.html?pack=%s&render=1" % (port, pack_id)
+    if safe:
+        url += "&safe=" + quote(safe, safe=":,")
+    if capsule:
+        url += "&capsule=1"
+    if baseline:
+        url += "&baseline=" + quote(str(baseline))
     tmpdir = tempfile.mkdtemp(prefix="e2s-shot-")
     out = os.path.join(tmpdir, "shot.png")
     profile = os.path.join(tmpdir, "profile")
@@ -206,8 +215,11 @@ class Handler(BaseHTTPRequestHandler):
                 height = max(200, min(4000, int(q.get("h", ["1280"])[0])))
             except ValueError:
                 width, height = 720, 1280
+            safe = q.get("safe", [None])[0]
+            capsule = q.get("capsule", [None])[0]
+            baseline = q.get("baseline", [None])[0]
             try:
-                png = render_screenshot(self.server.server_address[1], pack_id, width, height)
+                png = render_screenshot(self.server.server_address[1], pack_id, width, height, safe, capsule, baseline)
                 return self.send_bytes(png, "image/png")
             except Exception as exc:  # noqa: BLE001
                 return self.send_json({"error": "screenshot failed: %s" % exc}, status=500)

@@ -38,8 +38,14 @@
         </div>
       </div>
       <div class="sidebar-hint">
-        Drag to move · drag the corner handle to resize · normalized 0–1 coords,
-        relative to the <span id="canvas-size"></span> canvas.
+        Drag to move · corner handle to resize · normalized 0–1 coords on the
+        <span id="canvas-size"></span> canvas.<br><br>
+        <b>anchor</b>: per-element — <code>baseline</code> (moves with background)
+        or <code>top</code> (floats to safe area). <br>
+        <b>baseline line</b>: drag the blue line onto the reference row; exported
+        as <code>anchorLine</code>.<br>
+        URL flags: <code>?safe=top:0.07,bottom:0.04</code> ·
+        <code>?capsule=1</code> · <code>?baseline=0.5</code>
       </div>
     </aside>
   </div>
