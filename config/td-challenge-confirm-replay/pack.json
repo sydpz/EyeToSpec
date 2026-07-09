@@ -1,0 +1,145 @@
+{
+  "name": "td-challenge-confirm-replay",
+  "description": "精英关确认弹框-后续版(已打过)。木框羊皮纸底(已trim)。①title_art 艺术字『精英挑战』(烫金桂冠图) + levelno『第X关』代码字(关号运行时填)②三颗星 star1-3(该关精英星级,后端未建先占位,示意2实1空)③status『你已获得X星,要继续挑战吗?』(深棕#5a3410,星数/文案运行时按存档填)④striplbl『本关场景』+strip 季节色条⑤按钮 返回/挑战。与首次版骨架对齐:标题/季节条/按钮同位,中间蛋↔星切换。",
+  "canvas": {
+    "w": 720,
+    "h": 1280
+  },
+  "background": {
+    "file": null
+  },
+  "elements": [
+    {
+      "id": "scrim 遮罩",
+      "cx": 0.5,
+      "cy": 0.5,
+      "w": 1,
+      "h": 1,
+      "fill": "#000000",
+      "alpha": 0.55
+    },
+    {
+      "id": "dialog 木框底板",
+      "file": "dialog.png",
+      "cx": 0.5,
+      "cy": 0.5,
+      "w": 0.8,
+      "h": 0.675
+    },
+    {
+      "id": "title_art 精英挑战",
+      "file": "title-art.png",
+      "cx": 0.502,
+      "cy": 0.286,
+      "w": 0.94,
+      "h": 0.08
+    },
+    {
+      "id": "levelno 第X关",
+      "file": null,
+      "text": "第 1 关",
+      "fontSize": 30,
+      "color": "#7a4a10",
+      "align": "center",
+      "cx": 0.502,
+      "cy": 0.346,
+      "w": 0.4,
+      "h": 0.091
+    },
+    {
+      "id": "star1",
+      "file": "star-lit.png",
+      "cx": 0.326,
+      "cy": 0.439,
+      "w": 0.157,
+      "h": 0.088
+    },
+    {
+      "id": "star2",
+      "file": "star-lit.png",
+      "cx": 0.502,
+      "cy": 0.439,
+      "w": 0.157,
+      "h": 0.088
+    },
+    {
+      "id": "star3",
+      "file": "star-empty.png",
+      "cx": 0.678,
+      "cy": 0.439,
+      "w": 0.157,
+      "h": 0.088
+    },
+    {
+      "id": "status 状态问话",
+      "file": null,
+      "text": "你已获得 2 星，要继续挑战吗？",
+      "fontSize": 26,
+      "color": "#5a3410",
+      "align": "center",
+      "cx": 0.502,
+      "cy": 0.552,
+      "w": 0.78
+    },
+    {
+      "id": "striplbl 本关场景",
+      "file": null,
+      "text": "本关场景",
+      "fontSize": 20,
+      "color": "#7a5a2a",
+      "align": "center",
+      "cx": 0.5,
+      "cy": 0.606,
+      "w": 0.4,
+      "h": 0.091
+    },
+    {
+      "id": "strip 季节色条(春)",
+      "file": "card-spring.jpg",
+      "cx": 0.5,
+      "cy": 0.658,
+      "w": 0.62,
+      "h": 0.087
+    },
+    {
+      "id": "btn_back 返回(灰)",
+      "file": "btn-gray.png",
+      "cx": 0.335,
+      "cy": 0.745,
+      "w": 0.3,
+      "h": 0.051
+    },
+    {
+      "id": "btn_go 挑战(绿)",
+      "file": "btn-green.png",
+      "cx": 0.665,
+      "cy": 0.745,
+      "w": 0.3,
+      "h": 0.051
+    },
+    {
+      "id": "btn_back_txt 返回字",
+      "file": null,
+      "text": "返回",
+      "fontSize": 28,
+      "color": "#fff3da",
+      "align": "center",
+      "cx": 0.335,
+      "cy": 0.745,
+      "w": 0.3,
+      "h": 0.068
+    },
+    {
+      "id": "btn_go_txt 挑战字",
+      "file": null,
+      "text": "挑战",
+      "fontSize": 28,
+      "color": "#fff3da",
+      "align": "center",
+      "cx": 0.665,
+      "cy": 0.745,
+      "w": 0.3,
+      "h": 0.068
+    }
+  ]
+}

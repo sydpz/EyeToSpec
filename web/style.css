@@ -1,3 +1,4 @@
+@import url("https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap");
 /* EyeToSpec — a clean, dark, focused visual editor. */
 
 :root {
@@ -301,7 +302,7 @@ code {
 .el.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 
 .el-text { display: flex; align-items: center; }
-.el-text span { width: 100%; line-height: 1.2; white-space: normal; overflow-wrap: break-word; pointer-events: none; }
+.el-text span { font-family: "ZCOOL KuaiLe", "PingFang SC", "Microsoft YaHei", sans-serif; width: 100%; line-height: 1.2; white-space: normal; overflow-wrap: break-word; pointer-events: none; }
 
 .el-box {
   background: rgba(91, 140, 255, 0.18);
