@@ -401,6 +401,16 @@ function renderElements() {
       span.textContent = el.text;
       span.style.color = el.color || '#e8eaed';
       span.style.textAlign = el.align || 'left';
+      if (el.fontFamily) span.style.fontFamily = el.fontFamily;
+      if (el.fontWeight) span.style.fontWeight = el.fontWeight;
+      if (el.stroke) {
+        const sw = el.strokeWidth || 3;
+        span.style.webkitTextStroke = sw + 'px ' + el.stroke;
+        // paint-order so fill sits above stroke (stroke reads as outline)
+        span.style.paintOrder = 'stroke fill';
+        span.style.webkitTextStrokeColor = el.stroke;
+      }
+      if (el.shadow) span.style.textShadow = el.shadow;
       node.dataset.fontSize = el.fontSize || 16;
       node.appendChild(span);
     } else {
