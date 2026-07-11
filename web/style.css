@@ -181,8 +181,15 @@ code {
   justify-content: center;
   background:
     radial-gradient(circle at 50% 40%, #14171d 0%, #0c0e12 100%);
-  overflow: hidden;
+  overflow: auto;
 }
+/* When the zoomed canvas is bigger than the viewport, keep it scrollable but
+   don't let flex-centering clip the top/left (which centering + overflow does).
+   `margin:auto` on the stage centers when it fits, scrolls when it doesn't. */
+.stage-wrap > .stage { margin: auto; }
+.zoom-group { display: inline-flex; align-items: center; gap: 2px; margin-right: 8px; }
+.zoom-btn { min-width: 30px; font-size: 18px; line-height: 1; padding: 4px 8px; }
+.zoom-label { min-width: 52px; font-variant-numeric: tabular-nums; }
 .stage { position: relative; }
 .canvas {
   position: relative;

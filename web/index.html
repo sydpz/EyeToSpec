@@ -37,7 +37,11 @@
     function card(pack) {
       const a = document.createElement('a');
       a.className = 'pack-card';
-      a.href = 'editor.html?pack=' + encodeURIComponent(pack.id);
+      // Carry through line/baseline/minH from the current URL so a divider link
+      // (?line=divider&baseline=..) keeps working after clicking into a pack.
+      const carry = new URLSearchParams(location.search);
+      carry.set('pack', pack.id);
+      a.href = 'editor.html?' + carry.toString();
       a.innerHTML = `
         <div class="pack-card-top">
           <span class="pack-name"></span>
