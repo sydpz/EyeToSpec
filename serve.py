@@ -126,7 +126,7 @@ _ELEM_PASS = ("cx", "cy", "w", "h", "anchor", "rotation", "text", "color",
 # Single-point elements (one literal `cx`); multi-point rows and equal-spaced
 # arrays are handled separately below.
 _BASELINE_CENTER = ("hen", "banner")          # cy = baselineRatio + offsetY
-_BASELINE_TOP = ("avatar",)                   # cy = offsetTop
+_BASELINE_TOP = ("avatar", "res_heart_icon", "res_star_icon", "res_egg_icon")  # cy = offsetTop
 _BASELINE_BOTTOM = ("start",)                 # cy = 1 - offsetBottom
 
 # Multi-point rows: one layout key holds SEVERAL x fields sharing one row y (an
@@ -136,8 +136,6 @@ _BASELINE_BOTTOM = ("start",)                 # cy = 1 - offsetBottom
 # shared offset. `group` picks the y projection (top → offsetTop, bottom →
 # 1-offsetBottom). `points` maps x-field → texture key (None = placeholder box).
 _BASELINE_ROWS = {
-    "resourceBar": {"group": "top", "offset": "offsetTop",
-                    "points": [("left", None), ("right", None)]},
     "arrows": {"group": "bottom", "offset": "offsetBottom",
                "points": [("leftX", "home-arrow-left"), ("rightX", "home-arrow-right")]},
     "tabs": {"group": "bottom", "offset": "offsetBottom",
