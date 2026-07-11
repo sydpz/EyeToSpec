@@ -67,7 +67,9 @@ const toastEl = document.getElementById('toast');
 let manifest = null;      // the pack.json
 let elements = [];        // working state: [{id, file, text, ..., cx, cy, w, h}]
 let nodes = new Map();    // id -> DOM node
-let selectedId = null;
+let selectedIds = new Set();  // multi-select; single-select is a set of one
+// The "primary" selection (last clicked) drives the single-element inspector.
+let primaryId = null;
 let canvasAspect = 1;     // w / h of the pack canvas
 // Baseline (anchorLine): one draggable horizontal line per pack marking the
 // "reference object" row (barn's lower edge / candidate-deploy divider). Seeded
@@ -141,6 +143,7 @@ async function init() {
   renderList();
   window.addEventListener('resize', layoutStage);
   wireToolbar();
+  wireAlignBar();
 
   if (RENDER_MODE) {
     // Strip editor chrome so only the canvas + artwork remain, then fit the
@@ -526,7 +529,11 @@ let drag = null;
 function onPointerDown(e, el, node, mode) {
   e.preventDefault();
   e.stopPropagation();
-  select(el.id);
+  const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+  // Additive click only toggles selection — don't start a drag (which would
+  // move a single element and feel wrong mid multi-select).
+  if (additive) { select(el.id, true); return; }
+  if (!selectedIds.has(el.id)) select(el.id);
   node.setPointerCapture(e.pointerId);
   const { w: CW, h: CH } = canvasPx();
   const rect = node.getBoundingClientRect();
@@ -590,12 +597,124 @@ function onPointerUp(e) {
 // ---------------------------------------------------------------------------
 // selection, list, inspector
 // ---------------------------------------------------------------------------
-function select(id) {
-  selectedId = id;
-  for (const [nid, node] of nodes) node.classList.toggle('selected', nid === id);
+// select(id): id=null clears. With `additive` (Shift/Cmd-click) the element is
+// toggled in/out of the current selection; otherwise it becomes the sole one.
+function select(id, additive) {
+  if (id == null) {
+    selectedIds.clear();
+    primaryId = null;
+  } else if (additive) {
+    if (selectedIds.has(id) && selectedIds.size > 1) {
+      selectedIds.delete(id);
+      if (primaryId === id) primaryId = [...selectedIds][selectedIds.size - 1];
+    } else {
+      selectedIds.add(id);
+      primaryId = id;
+    }
+  } else {
+    selectedIds = new Set([id]);
+    primaryId = id;
+  }
+  for (const [nid, node] of nodes) node.classList.toggle('selected', selectedIds.has(nid));
   listEl.querySelectorAll('li').forEach(li =>
-    li.classList.toggle('active', li.dataset.id === id));
+    li.classList.toggle('active', selectedIds.has(li.dataset.id)));
   updateInspector();
+  updateAlignBar();
+}
+
+// ---------------------------------------------------------------------------
+// multi-element align / distribute / center-on-canvas
+// ---------------------------------------------------------------------------
+// Normalized half-height of an element. Explicit h wins; otherwise measure the
+// live node (aspect-locked images) and convert to canvas fraction.
+function halfHeightOf(el) {
+  if (el.h != null) return el.h / 2;
+  const node = nodes.get(el.id);
+  const { h: CH } = canvasPx();
+  return node ? (node.offsetHeight / CH) / 2 : el.w / 2;
+}
+
+function selectedElements() {
+  return elements.filter(e => selectedIds.has(e.id));
+}
+
+// Apply a mutation to each selected element, then re-place + refresh inputs.
+function applyToSelection(fn) {
+  const sel = selectedElements();
+  if (sel.length < 2) return;
+  fn(sel);
+  for (const el of sel) placeNode(el);
+  updateInspector();
+}
+
+// Align edges/centers to the selection's bounding box (Figma-style).
+function alignSelection(edge) {
+  applyToSelection((sel) => {
+    const boxes = sel.map(el => ({
+      el, hw: el.w / 2, hh: halfHeightOf(el),
+    }));
+    const left   = Math.min(...boxes.map(b => b.el.cx - b.hw));
+    const right  = Math.max(...boxes.map(b => b.el.cx + b.hw));
+    const top    = Math.min(...boxes.map(b => b.el.cy - b.hh));
+    const bottom = Math.max(...boxes.map(b => b.el.cy + b.hh));
+    for (const b of boxes) {
+      if (edge === 'left')   b.el.cx = left + b.hw;
+      if (edge === 'right')  b.el.cx = right - b.hw;
+      if (edge === 'hcenter') b.el.cx = (left + right) / 2;
+      if (edge === 'top')    b.el.cy = top + b.hh;
+      if (edge === 'bottom') b.el.cy = bottom - b.hh;
+      if (edge === 'vcenter') b.el.cy = (top + bottom) / 2;
+    }
+  });
+}
+
+// Distribute so element CENTERS are evenly spaced between the two extremes.
+// (Simple, predictable; edge-gap distribution can come later if needed.)
+function distributeSelection(axis) {
+  applyToSelection((sel) => {
+    if (sel.length < 3) return;   // 2 elements are already "evenly spaced"
+    const key = axis === 'h' ? 'cx' : 'cy';
+    const sorted = [...sel].sort((a, b) => a[key] - b[key]);
+    const lo = sorted[0][key], hi = sorted[sorted.length - 1][key];
+    const step = (hi - lo) / (sorted.length - 1);
+    sorted.forEach((el, i) => { el[key] = lo + step * i; });
+  });
+}
+
+// Center the whole selection on the canvas (moves as a group, keeps relative
+// layout) on one axis.
+function centerOnCanvas(axis) {
+  applyToSelection((sel) => {
+    const key = axis === 'h' ? 'cx' : 'cy';
+    const hwOf = axis === 'h' ? (el => el.w / 2) : halfHeightOf;
+    const lo = Math.min(...sel.map(el => el[key] - hwOf(el)));
+    const hi = Math.max(...sel.map(el => el[key] + hwOf(el)));
+    const delta = 0.5 - (lo + hi) / 2;
+    for (const el of sel) el[key] += delta;
+  });
+}
+
+// Show the align bar only when 2+ elements are selected.
+function updateAlignBar() {
+  const bar = document.getElementById('align-bar');
+  if (!bar) return;
+  const n = selectedIds.size;
+  bar.hidden = n < 2;
+  const count = document.getElementById('align-count');
+  if (count) count.textContent = n + ' selected';
+  const distBtns = bar.querySelectorAll('[data-distribute]');
+  distBtns.forEach(b => b.disabled = n < 3);
+}
+
+function wireAlignBar() {
+  const bar = document.getElementById('align-bar');
+  if (!bar) return;
+  bar.querySelectorAll('[data-align]').forEach(b =>
+    b.addEventListener('click', () => alignSelection(b.dataset.align)));
+  bar.querySelectorAll('[data-distribute]').forEach(b =>
+    b.addEventListener('click', () => distributeSelection(b.dataset.distribute)));
+  bar.querySelectorAll('[data-center]').forEach(b =>
+    b.addEventListener('click', () => centerOnCanvas(b.dataset.center)));
 }
 
 function renderList() {
@@ -606,13 +725,13 @@ function renderList() {
     const kind = el.file ? 'image' : (typeof el.text === 'string' ? 'text' : 'box');
     li.innerHTML = `<span class="el-name"></span><span class="el-kind">${kind}</span>`;
     li.querySelector('.el-name').textContent = el.id;
-    li.addEventListener('click', () => select(el.id));
+    li.addEventListener('click', (e) => select(el.id, e.shiftKey || e.metaKey || e.ctrlKey));
     listEl.appendChild(li);
   }
 }
 
 function updateInspector() {
-  const el = elements.find(e => e.id === selectedId);
+  const el = elements.find(e => e.id === primaryId);
   if (!el) { inspectorEl.innerHTML = '<div class="inspector-empty">Click an element to inspect it.</div>'; return; }
   const h = el.h != null ? el.h : (el._imgAspect ? el.w / el._imgAspect * (manifest.canvas.w / manifest.canvas.h) : 0);
   inspectorEl.innerHTML = `

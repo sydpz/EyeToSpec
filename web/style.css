@@ -375,6 +375,15 @@ code {
   flex-direction: column;
   overflow-y: auto;
 }
+/* multi-select align toolbar */
+.align-count { text-transform: none; letter-spacing: 0; color: var(--text-faint); font-weight: 400; margin-left: 0.4rem; }
+.align-hint { color: var(--text-faint); font-size: 0.75rem; margin-bottom: 0.6rem; }
+.align-group { margin-bottom: 0.6rem; }
+.align-label { display: block; font-size: 0.72rem; color: var(--text-faint); margin-bottom: 0.25rem; }
+.align-row { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.align-row .btn { padding: 0.35rem 0.5rem; min-width: 2rem; font-size: 1rem; line-height: 1; }
+.align-row .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
 .sidebar-section { padding: 1.1rem 1.2rem; border-bottom: 1px solid var(--border); }
 .sidebar-section h2 {
   font-size: 0.74rem;

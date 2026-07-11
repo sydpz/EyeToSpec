@@ -39,6 +39,35 @@
         <h2>Elements</h2>
         <ul id="element-list" class="element-list"></ul>
       </div>
+      <div id="align-bar" class="sidebar-section align-bar" hidden>
+        <h2>Align <span id="align-count" class="align-count"></span></h2>
+        <div class="align-hint">Shift/⌘-click to add elements.</div>
+        <div class="align-group">
+          <span class="align-label">Align</span>
+          <div class="align-row">
+            <button class="btn btn-ghost" data-align="left" title="Align left edges">⇤</button>
+            <button class="btn btn-ghost" data-align="hcenter" title="Align horizontal centers">↔</button>
+            <button class="btn btn-ghost" data-align="right" title="Align right edges">⇥</button>
+            <button class="btn btn-ghost" data-align="top" title="Align top edges">⤒</button>
+            <button class="btn btn-ghost" data-align="vcenter" title="Align vertical centers">↕</button>
+            <button class="btn btn-ghost" data-align="bottom" title="Align bottom edges">⤓</button>
+          </div>
+        </div>
+        <div class="align-group">
+          <span class="align-label">Distribute</span>
+          <div class="align-row">
+            <button class="btn btn-ghost" data-distribute="h" title="Distribute centers horizontally (3+)">⇔</button>
+            <button class="btn btn-ghost" data-distribute="v" title="Distribute centers vertically (3+)">⇕</button>
+          </div>
+        </div>
+        <div class="align-group">
+          <span class="align-label">Center on canvas</span>
+          <div class="align-row">
+            <button class="btn btn-ghost" data-center="h" title="Center selection horizontally on canvas">H</button>
+            <button class="btn btn-ghost" data-center="v" title="Center selection vertically on canvas">V</button>
+          </div>
+        </div>
+      </div>
       <div class="sidebar-section">
         <h2>Selected</h2>
         <div id="inspector" class="inspector">
@@ -47,7 +76,8 @@
       </div>
       <div class="sidebar-hint">
         Drag to move · corner handle to resize · normalized 0–1 coords on the
-        <span id="canvas-size"></span> canvas.<br><br>
+        <span id="canvas-size"></span> canvas.<br>
+        <b>Shift/⌘-click</b> to select multiple → align / distribute tools appear.<br><br>
         <b>anchor</b>: per-element — <code>baseline</code> (moves w/ background),
         <code>top</code> / <code>center</code> / <code>bottom</code> (floats to
         that screen edge / safe area).<br>
