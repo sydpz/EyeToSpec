@@ -865,6 +865,11 @@ function updateInspector() {
       <label>h<input data-k="h" type="number" step="0.001" value="${h.toFixed(3)}"></label>
       <label>rotation°<input data-k="rotation" type="number" step="1" value="${(el.rotation || 0).toFixed(1)}"></label>
     </div>
+    ${typeof el.text === 'string' ? `
+    <div class="insp-text">
+      <label class="insp-text-content">text<input id="insp-text" type="text" value="${escAttr(el.text)}"></label>
+      <label class="insp-text-size">size px<input id="insp-fontsize" type="number" step="1" min="1" value="${el.fontSize || 16}"></label>
+    </div>` : ''}
     <div class="insp-flip">
       <button data-flip="flipH" class="flip-btn${el.flipH ? ' on' : ''}">↔ flip H</button>
       <button data-flip="flipV" class="flip-btn${el.flipV ? ' on' : ''}">↕ flip V</button>
@@ -902,7 +907,7 @@ function updateInspector() {
       placeNode(el);
     });
   });
-  inspectorEl.querySelectorAll('input').forEach(inp => {
+  inspectorEl.querySelectorAll('input[data-k]').forEach(inp => {
     inp.addEventListener('change', () => {
       const k = inp.dataset.k;
       const v = parseFloat(inp.value);
@@ -912,6 +917,28 @@ function updateInspector() {
       placeNode(el);
     });
   });
+  // Text content + font size (text elements only). Live-update the rendered
+  // span, and mirror fontSize onto the node's data attr so placeNode scales it.
+  const txtInp = inspectorEl.querySelector('#insp-text');
+  if (txtInp) txtInp.addEventListener('input', () => {
+    el.text = txtInp.value;
+    const span = nodes.get(el.id)?.querySelector('span');
+    if (span) span.textContent = el.text;
+  });
+  const sizeInp = inspectorEl.querySelector('#insp-fontsize');
+  if (sizeInp) sizeInp.addEventListener('change', () => {
+    const v = parseFloat(sizeInp.value);
+    if (isNaN(v) || v < 1) return;
+    el.fontSize = v;
+    const node = nodes.get(el.id);
+    if (node) { node.dataset.fontSize = v; placeNode(el); }
+  });
+}
+
+// Escape a string for safe use inside a double-quoted HTML attribute.
+function escAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // ---------------------------------------------------------------------------

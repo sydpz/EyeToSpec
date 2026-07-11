@@ -459,6 +459,20 @@ code {
   width: 100%;
 }
 .insp-grid input:focus { outline: none; border-color: var(--accent); }
+.insp-text {
+  display: grid; grid-template-columns: 2fr 1fr; gap: 0.55rem; margin-top: 0.7rem;
+}
+.insp-text label {
+  display: flex; flex-direction: column;
+  font-size: 0.72rem; color: var(--text-faint);
+  text-transform: uppercase; letter-spacing: 0.05em; gap: 0.25rem;
+}
+.insp-text input {
+  font: inherit; font-size: 0.85rem;
+  background: var(--bg); border: 1px solid var(--border-strong);
+  color: var(--text); border-radius: 6px; padding: 0.35rem 0.5rem; width: 100%;
+}
+.insp-text input:focus { outline: none; border-color: var(--accent); }
 .insp-flip { display: flex; gap: 0.55rem; margin-top: 0.7rem; }
 .flip-btn {
   flex: 1;
