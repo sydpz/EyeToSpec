@@ -71,6 +71,8 @@ let selectedIds = new Set();  // multi-select; single-select is a set of one
 // The "primary" selection (last clicked) drives the single-element inspector.
 let primaryId = null;
 let canvasAspect = 1;     // w / h of the pack canvas
+let zoom = 1;             // 1 = fit-to-viewport; >1 = magnified (stage-wrap scrolls)
+const ZOOM_MIN = 1, ZOOM_MAX = 6, ZOOM_STEP = 1.25;
 // Baseline (anchorLine): one draggable horizontal line per pack marking the
 // "reference object" row (barn's lower edge / candidate-deploy divider). Seeded
 // from a saved export or manifest.anchorLine; exported back as anchorLine.cy.
@@ -257,9 +259,12 @@ function layoutStage() {
   const wrap = stageEl.parentElement;
   const availW = wrap.clientWidth - 32;
   const availH = wrap.clientHeight - 32;
+  // Base "fit" size (zoom = 1), then scale up by the zoom factor. At zoom > 1
+  // the canvas overflows stage-wrap, which scrolls (see .stage-wrap overflow).
   let w = availW;
   let h = w / canvasAspect;
   if (h > availH) { h = availH; w = h * canvasAspect; }
+  w *= zoom; h *= zoom;
   canvasEl.style.width = w + 'px';
   canvasEl.style.height = h + 'px';
   sizeSafeBands();
@@ -268,6 +273,23 @@ function layoutStage() {
   // re-place nodes now that px size changed
   for (const el of elements) placeNode(el);
   checkSafeViolations();
+}
+
+// Set zoom, keeping the current viewport center fixed, then relayout.
+function setZoom(next) {
+  const wrap = stageEl.parentElement;
+  const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next));
+  if (clamped === zoom) return;
+  // fraction of scrollable content currently centered in the viewport
+  const cxFrac = (wrap.scrollLeft + wrap.clientWidth / 2) / Math.max(1, wrap.scrollWidth);
+  const cyFrac = (wrap.scrollTop + wrap.clientHeight / 2) / Math.max(1, wrap.scrollHeight);
+  zoom = clamped;
+  layoutStage();
+  // restore that same center after the canvas resized
+  wrap.scrollLeft = cxFrac * wrap.scrollWidth - wrap.clientWidth / 2;
+  wrap.scrollTop = cyFrac * wrap.scrollHeight - wrap.clientHeight / 2;
+  const label = document.getElementById('zoom-reset-btn');
+  if (label) label.textContent = Math.round(zoom * 100) + '%';
 }
 
 function canvasPx() {
@@ -987,6 +1009,22 @@ function wireToolbar() {
     navigator.clipboard?.writeText(text).then(() => toast('Copied to clipboard'));
   });
   canvasEl.addEventListener('pointerdown', (e) => { if (e.target === canvasEl) select(null); });
+
+  // Zoom controls: buttons, keyboard (+ / - / 0), and Ctrl/Cmd + wheel.
+  document.getElementById('zoom-in-btn').addEventListener('click', () => setZoom(zoom * ZOOM_STEP));
+  document.getElementById('zoom-out-btn').addEventListener('click', () => setZoom(zoom / ZOOM_STEP));
+  document.getElementById('zoom-reset-btn').addEventListener('click', () => setZoom(1));
+  window.addEventListener('keydown', (e) => {
+    if (e.target.matches('input, textarea')) return;
+    if (e.key === '+' || e.key === '=') { e.preventDefault(); setZoom(zoom * ZOOM_STEP); }
+    else if (e.key === '-' || e.key === '_') { e.preventDefault(); setZoom(zoom / ZOOM_STEP); }
+    else if (e.key === '0') { e.preventDefault(); setZoom(1); }
+  });
+  stageEl.parentElement.addEventListener('wheel', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;   // plain scroll = pan; Ctrl/Cmd+wheel = zoom
+    e.preventDefault();
+    setZoom(zoom * (e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP));
+  }, { passive: false });
 }
 
 function showJson() {
