@@ -109,8 +109,17 @@ async function init() {
     saved = await fetch('/api/output/' + encodeURIComponent(PACK_ID)).then(r => r.json());
   } catch (e) { saved = {}; }
 
-  elements = (manifest.elements || []).map(el => {
-    const s = saved[el.id] || {};
+  // Element set = pack.json elements  ∪  output._added (duplicates you made in
+  // the editor). Each carries a merged geometry from output, plus an `enabled`
+  // flag (soft-delete): output wins over pack, default true. Disabled elements
+  // stay in the list (greyed, restorable) but don't render on the canvas.
+  // `_added` marks editor-created elements so buildOutput() can round-trip them.
+  const added = Array.isArray(saved._added) ? saved._added : [];
+  const source = (manifest.elements || []).concat(
+    added.map(a => Object.assign({}, a, { _added: true })));
+
+  elements = source.map(el => {
+    const s = (el._added ? el : saved[el.id]) || {};
     return Object.assign({}, el, {
       cx: num(s.cx, el.cx, 0.5),
       cy: num(s.cy, el.cy, 0.5),
@@ -124,6 +133,8 @@ async function init() {
       // top (HUD). Mirrors game-engine anchor systems (Unity RectTransform / Cocos
       // Widget); we currently implement two of the values.
       anchor: str(s.anchor, el.anchor, 'baseline'),
+      // soft-delete: output.enabled overrides pack.enabled, default enabled.
+      enabled: bool(saved[el.id]?.enabled, el.enabled, true),
     });
   });
 
@@ -144,6 +155,15 @@ async function init() {
   window.addEventListener('resize', layoutStage);
   wireToolbar();
   wireAlignBar();
+
+  // Delete / Backspace soft-deletes the selection (ignored while typing coords).
+  window.addEventListener('keydown', (e) => {
+    if (e.target.matches('input, textarea')) return;
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.size) {
+      e.preventDefault();
+      for (const id of [...selectedIds]) setEnabled(id, false);
+    }
+  });
 
   if (RENDER_MODE) {
     // Strip editor chrome so only the canvas + artwork remain, then fit the
@@ -424,6 +444,7 @@ function renderElements() {
   canvasEl.querySelectorAll('.el').forEach(n => n.remove());
   nodes.clear();
   for (const el of elements) {
+    if (el.enabled === false) continue;   // soft-deleted: not on canvas
     const node = document.createElement('div');
     node.className = 'el';
     if (el.anchor === 'top') node.classList.add('is-hud');
@@ -615,6 +636,12 @@ function select(id, additive) {
     selectedIds = new Set([id]);
     primaryId = id;
   }
+  refreshSelectionUI();
+}
+
+// Re-sync highlight / inspector / align bar to the current selection set,
+// without changing which ids are selected (used after delete/restore).
+function refreshSelectionUI() {
   for (const [nid, node] of nodes) node.classList.toggle('selected', selectedIds.has(nid));
   listEl.querySelectorAll('li').forEach(li =>
     li.classList.toggle('active', selectedIds.has(li.dataset.id)));
@@ -717,15 +744,71 @@ function wireAlignBar() {
     b.addEventListener('click', () => centerOnCanvas(b.dataset.center)));
 }
 
+// ---------------------------------------------------------------------------
+// delete (soft) / duplicate
+// ---------------------------------------------------------------------------
+function uniqueId(base) {
+  let id = base, n = 2;
+  const taken = new Set(elements.map(e => e.id));
+  while (taken.has(id)) { id = base + '-' + n; n++; }
+  return id;
+}
+
+// Soft-delete: flag enabled=false (kept in list, restorable). Pack elements and
+// duplicates alike — a disabled duplicate simply won't render but still exports.
+function setEnabled(id, on) {
+  const el = elements.find(e => e.id === id);
+  if (!el) return;
+  el.enabled = on;
+  if (!on) {                       // deleting: drop it from the selection
+    selectedIds.delete(id);
+    if (primaryId === id) primaryId = [...selectedIds].pop() || null;
+  }
+  renderElements();
+  renderList();
+  refreshSelectionUI();            // re-sync highlight + inspector + align bar
+}
+
+// Duplicate: clone identity + geometry, new id (<id>-copy…), nudged so it's
+// visible, marked _added so it round-trips via output._added.
+function duplicateElement(id) {
+  const src = elements.find(e => e.id === id);
+  if (!src) return;
+  const copy = Object.assign({}, src, {
+    id: uniqueId(src.id + '-copy'),
+    cx: clamp(src.cx + 0.03, 0, 1),
+    cy: clamp(src.cy + 0.03, 0, 1),
+    enabled: true,
+    _added: true,
+  });
+  delete copy._imgAspect;   // let the new node measure its own image
+  const idx = elements.findIndex(e => e.id === id);
+  elements.splice(idx + 1, 0, copy);
+  renderElements();
+  renderList();
+  select(copy.id);
+}
+
 function renderList() {
   listEl.innerHTML = '';
   for (const el of elements) {
     const li = document.createElement('li');
     li.dataset.id = el.id;
     const kind = el.file ? 'image' : (typeof el.text === 'string' ? 'text' : 'box');
-    li.innerHTML = `<span class="el-name"></span><span class="el-kind">${kind}</span>`;
+    const disabled = el.enabled === false;
+    if (disabled) li.classList.add('is-disabled');
+    li.innerHTML = `<span class="el-name"></span>` +
+      (el._added ? '<span class="el-tag">copy</span>' : '') +
+      `<span class="el-kind">${kind}</span>` +
+      `<button class="el-toggle" title="${disabled ? 'Restore' : 'Delete'}">${disabled ? '↺' : '🗑'}</button>`;
     li.querySelector('.el-name').textContent = el.id;
-    li.addEventListener('click', (e) => select(el.id, e.shiftKey || e.metaKey || e.ctrlKey));
+    const addit = (e) => e.shiftKey || e.metaKey || e.ctrlKey;
+    li.querySelector('.el-name').addEventListener('click', (e) => select(el.id, addit(e)));
+    li.querySelector('.el-toggle').addEventListener('click', (e) => {
+      e.stopPropagation();
+      setEnabled(el.id, disabled);   // toggle delete / restore
+    });
+    li.addEventListener('click', (e) => { if (e.target === li) select(el.id, addit(e)); });
     listEl.appendChild(li);
   }
 }
@@ -755,8 +838,14 @@ function updateInspector() {
         <button data-anchor="center" class="anchor-btn${el.anchor === 'center' ? ' on' : ''}">center</button>
         <button data-anchor="bottom" class="anchor-btn${el.anchor === 'bottom' ? ' on' : ''}">bottom</button>
       </div>
+    </div>
+    <div class="insp-actions">
+      <button id="dup-btn" class="btn btn-ghost" title="Duplicate this element">⧉ Duplicate</button>
+      <button id="del-btn" class="btn btn-ghost btn-danger" title="Delete (soft — restorable from the list)">🗑 Delete</button>
     </div>`;
   inspectorEl.querySelector('.insp-id').textContent = el.id;
+  inspectorEl.querySelector('#dup-btn').addEventListener('click', () => duplicateElement(el.id));
+  inspectorEl.querySelector('#del-btn').addEventListener('click', () => setEnabled(el.id, false));
   inspectorEl.querySelectorAll('.anchor-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       el.anchor = btn.dataset.anchor;
@@ -789,8 +878,15 @@ function updateInspector() {
 // ---------------------------------------------------------------------------
 // export / save
 // ---------------------------------------------------------------------------
+// Fields that define an editor-created (duplicated) element's identity, beyond
+// geometry — carried in output._added so a duplicate survives reload without
+// touching pack.json.
+const IDENTITY_KEYS = ['file', 'text', 'color', 'align', 'fontSize', 'fontFamily',
+  'fontWeight', 'stroke', 'strokeWidth', 'shadow', 'fill', 'alpha', 'radius'];
+
 function buildOutput() {
   const out = {};
+  const added = [];
   const { w: CW, h: CH } = canvasPx();
   for (const el of elements) {
     let h = el.h;
@@ -798,14 +894,24 @@ function buildOutput() {
       const node = nodes.get(el.id);
       h = node ? node.offsetHeight / CH : 0;
     }
-    out[el.id] = {
+    const geo = {
       cx: round(el.cx), cy: round(el.cy), w: round(el.w), h: round(h),
     };
-    if (el.rotation) out[el.id].rotation = Math.round(el.rotation * 10) / 10;
-    if (el.flipH) out[el.id].flipH = true;
-    if (el.flipV) out[el.id].flipV = true;
-    if (el.anchor && el.anchor !== 'baseline') out[el.id].anchor = el.anchor;  // default baseline omitted
+    if (el.rotation) geo.rotation = Math.round(el.rotation * 10) / 10;
+    if (el.flipH) geo.flipH = true;
+    if (el.flipV) geo.flipV = true;
+    if (el.anchor && el.anchor !== 'baseline') geo.anchor = el.anchor;  // default baseline omitted
+    if (el.enabled === false) geo.enabled = false;  // soft-delete flag
+    if (el._added) {
+      // duplicate: store full definition (identity + geometry) in _added
+      const def = { id: el.id };
+      for (const k of IDENTITY_KEYS) if (el[k] !== undefined) def[k] = el[k];
+      added.push(Object.assign(def, geo));
+    } else {
+      out[el.id] = geo;
+    }
   }
+  if (added.length) out._added = added;
   // The horizontal line is a page property (top level), and exports a DIFFERENT
   // field per its kind (§ LINE_KIND):
   //   bgAnchor → anchorLine.cy    (foreground pins to background art)
@@ -822,8 +928,56 @@ function buildOutput() {
 
 function round(n) { return Math.round(n * 1000) / 1000; }
 
+// Build a fresh pack.json from the current working state (for write-back Save).
+// Disabled elements are dropped (real delete); duplicates become first-class
+// pack elements; geometry is folded in so output/ can be cleared afterwards.
+function buildPackManifest() {
+  const { w: CW, h: CH } = canvasPx();
+  const out = Object.assign({}, manifest);   // preserve name/description/canvas/…
+  out.elements = [];
+  for (const el of elements) {
+    if (el.enabled === false) continue;       // real delete on write-back
+    let h = el.h;
+    if (h == null) {
+      const node = nodes.get(el.id);
+      h = node ? round(node.offsetHeight / CH) : undefined;
+    }
+    // start from the element's own persisted fields, minus editor-internal ones
+    const def = {};
+    for (const k of Object.keys(el)) {
+      if (k === 'enabled' || k === '_added' || k.startsWith('_')) continue;
+      def[k] = el[k];
+    }
+    def.cx = round(el.cx); def.cy = round(el.cy); def.w = round(el.w);
+    if (h != null) def.h = h; else delete def.h;
+    if (el.rotation) def.rotation = Math.round(el.rotation * 10) / 10; else delete def.rotation;
+    def.flipH = el.flipH || undefined;
+    def.flipV = el.flipV || undefined;
+    if (def.flipH === undefined) delete def.flipH;
+    if (def.flipV === undefined) delete def.flipV;
+    if (el.anchor && el.anchor !== 'baseline') def.anchor = el.anchor; else delete def.anchor;
+    out.elements.push(def);
+  }
+  // fold the baseline/elastic-zone into the manifest too
+  if (anchorCy != null) {
+    if (LINE_KIND === 'divider') out.elasticZone = { topCy: round(anchorCy), minH: round(ELASTIC_MIN_H) };
+    else out.anchorLine = { cx: 0.5, cy: round(anchorCy), w: 1, h: 0.04 };
+  }
+  return out;
+}
+
 function wireToolbar() {
   document.getElementById('save-btn').addEventListener('click', save);
+  const menu = document.getElementById('save-menu');
+  document.getElementById('save-menu-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.hidden = !menu.hidden;
+  });
+  document.getElementById('save-diff-btn').addEventListener('click', () => {
+    menu.hidden = true;
+    saveDiff();
+  });
+  document.addEventListener('click', () => { menu.hidden = true; });   // click-away
   document.getElementById('export-btn').addEventListener('click', showJson);
   document.getElementById('reset-btn').addEventListener('click', resetSeed);
   document.getElementById('close-modal').addEventListener('click', () =>
@@ -840,14 +994,46 @@ function showJson() {
   document.getElementById('json-modal').hidden = false;
 }
 
+// Default Save = write back to pack.json (fold in deletes/duplicates/geometry,
+// then clear the output overlay). This edits the hand-authored source, so it
+// confirms first and reloads to the fresh pack afterward.
 async function save() {
+  const hasDeletes = elements.some(e => e.enabled === false);
+  const hasAdds = elements.some(e => e._added);
+  const extra = hasDeletes || hasAdds
+    ? '\n\nDeleted elements are removed for good; duplicates become permanent.'
+    : '';
+  if (!confirm('Write these changes back into pack.json?' + extra +
+      '\n\nThe output/ overlay for this pack will be cleared. (Use ▾ → Save diff to keep pack.json untouched.)')) {
+    return;
+  }
+  try {
+    const res = await fetch('/api/writepack/' + encodeURIComponent(PACK_ID), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildPackManifest()),
+    }).then(r => r.json());
+    if (res.ok) {
+      toast('Written → ' + res.path + ' · reloading…');
+      setTimeout(() => location.reload(), 600);
+    } else {
+      toast('Write-back failed: ' + (res.error || '?'), true);
+    }
+  } catch (e) {
+    toast('Write-back failed: ' + e, true);
+  }
+}
+
+// Incremental Save = write only output/<id>.json (geometry + enabled + _added
+// overlay); pack.json stays untouched. The "keep it a diff" option.
+async function saveDiff() {
   try {
     const res = await fetch('/api/save/' + encodeURIComponent(PACK_ID), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(buildOutput()),
     }).then(r => r.json());
-    if (res.ok) toast('Saved → ' + res.path);
+    if (res.ok) toast('Saved diff → ' + res.path);
     else toast('Save failed: ' + (res.error || '?'), true);
   } catch (e) {
     toast('Save failed: ' + e, true);

@@ -335,6 +335,33 @@ class Handler(BaseHTTPRequestHandler):
             rel = os.path.relpath(out, ROOT)
             return self.send_json({"ok": True, "path": rel})
 
+        # Write-back: overwrite pack.json with the editor's merged manifest and
+        # clear the now-redundant output overlay. Unlike /api/save this DOES
+        # modify the hand-authored source — only ever on an explicit user action.
+        if path.startswith("/api/writepack/"):
+            pack_id = path[len("/api/writepack/"):]
+            if not is_safe_id(pack_id):
+                return self.send_json({"error": "bad pack id"}, status=400)
+            pack_dir = os.path.join(CONFIG_DIR, pack_id)
+            if not os.path.isdir(pack_dir):
+                return self.send_json({"error": "unknown pack"}, status=404)
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                manifest = json.loads(self.rfile.read(length).decode("utf-8"))
+            except (ValueError, json.JSONDecodeError):
+                return self.send_json({"error": "invalid json body"}, status=400)
+            if not isinstance(manifest, dict) or "elements" not in manifest:
+                return self.send_json({"error": "not a pack manifest"}, status=400)
+            pack_path = os.path.join(pack_dir, "pack.json")
+            with open(pack_path, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            # the overlay is now folded into the pack; drop it so it can't shadow
+            out = os.path.join(OUTPUT_DIR, pack_id + ".json")
+            if os.path.isfile(out):
+                os.remove(out)
+            return self.send_json({"ok": True, "path": os.path.relpath(pack_path, ROOT)})
+
         return self.send_json({"error": "not found"}, status=404)
 
 
