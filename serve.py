@@ -123,13 +123,125 @@ _ELEM_PASS = ("cx", "cy", "w", "h", "anchor", "rotation", "text", "color",
 # screen-height term. The draggable baseline (anchorLine.cy) seeds to
 # baselineRatio: dragging it re-pins the hen AND marks the bg nest (they converge
 # in this matched space), and on save writes back baselineRatio + bg.anchorY.
-# Only elements with a single-point `cx` participate (hen/banner/avatar/chests/
-# start); edge-pinned multi-point rows (resourceBar/arrows/tabs, keyed by
-# left/right/leftX/...) don't align to the background, so they're left out of the
-# editor this pass.
+# Single-point elements (one literal `cx`); multi-point rows and equal-spaced
+# arrays are handled separately below.
 _BASELINE_CENTER = ("hen", "banner")          # cy = baselineRatio + offsetY
 _BASELINE_TOP = ("avatar",)                   # cy = offsetTop
-_BASELINE_BOTTOM = ("chests", "start")        # cy = 1 - offsetBottom
+_BASELINE_BOTTOM = ("start",)                 # cy = 1 - offsetBottom
+
+# Multi-point rows: one layout key holds SEVERAL x fields sharing one row y (an
+# offset* against an anchor group). Each x field becomes its own draggable editor
+# element (id "<row>.<field>"), so the owner places each icon on the real bg. On
+# save, each child's cx writes back its x field and its cy re-derives the row's
+# shared offset. `group` picks the y projection (top → offsetTop, bottom →
+# 1-offsetBottom). `points` maps x-field → texture key (None = placeholder box).
+_BASELINE_ROWS = {
+    "resourceBar": {"group": "top", "offset": "offsetTop",
+                    "points": [("left", None), ("right", None)]},
+    "arrows": {"group": "bottom", "offset": "offsetBottom",
+               "points": [("leftX", "home-arrow-left"), ("rightX", "home-arrow-right")]},
+    "tabs": {"group": "bottom", "offset": "offsetBottom",
+             "points": [("shopX", "home-tab-shop"), ("henhouseX", "home-tab-henhouse"),
+                        ("towerX", "home-tab-tower"), ("dungeonX", "home-tab-dungeon")]},
+}
+# Separator between a row key and its x field in a child element id.
+_ROW_SEP = "."
+
+# Equal-spaced arrays: one layout key renders N icons at cx + (i - (N-1)/2)*gap,
+# sharing one center `cx`, one `gap`, one `size` (all fractions of width). Unlike
+# _BASELINE_ROWS (independent x per point), these move as a set: dragging the
+# MIDDLE child re-centers the row (writes cx); dragging an END child re-derives
+# the spacing (writes gap). Each child id is "<key>.<i>" (1-based). `tex` is a
+# format string over the 1-based index for per-slot art (home-reward-1-closed …).
+_BASELINE_ARRAYS = {
+    "chests": {"group": "bottom", "offset": "offsetBottom", "count": 3,
+               "tex": "home-reward-%d-closed"},
+}
+
+
+def _row_offset_to_cy(spec, v, baseline_ratio):
+    """The shared editor cy for a multi-point row from its offset field."""
+    off = _num(v.get(spec["offset"]), 0.0)
+    return off if spec["group"] == "top" else 1.0 - off
+
+
+def _project_baseline_row(key, v, baseline_ratio, profiles):
+    """Explode a multi-point row into editor child elements (one per x field).
+    Each child id is "<row>.<field>"; cy is the row's shared projected y; w
+    reuses the row's `size` (a fraction of width) so icons show at true scale."""
+    spec = _BASELINE_ROWS[key]
+    cy = _row_offset_to_cy(spec, v, baseline_ratio)
+    size = v.get("size", v.get("w"))
+    out = []
+    for field, tex in spec["points"]:
+        if field not in v:
+            continue
+        el = {"id": key + _ROW_SEP + field, "cx": v.get(field), "cy": cy}
+        if isinstance(size, (int, float)):
+            el["w"] = size
+        if tex and tex in profiles:
+            scene, fmt = profiles[tex]
+            el["file"] = "%s/%s.%s" % (scene, tex, fmt)
+        out.append(el)
+    return out
+
+
+def _project_baseline_array(key, v, baseline_ratio, profiles):
+    """Explode an equal-spaced array into N editor children at cx+(i-(N-1)/2)*gap.
+    Child id "<key>.<i>" (1-based); shared cy; w = the array's `size`."""
+    spec = _BASELINE_ARRAYS[key]
+    cy = _row_offset_to_cy(spec, v, baseline_ratio)
+    count = spec["count"]
+    cx = _num(v.get("cx"), 0.5)
+    gap = _num(v.get("gap"), 0.0)
+    size = v.get("size", v.get("w"))
+    out = []
+    for i in range(1, count + 1):
+        center = cx + (i - 1 - (count - 1) / 2.0) * gap
+        el = {"id": "%s%s%d" % (key, _ROW_SEP, i), "cx": center, "cy": cy}
+        if isinstance(size, (int, float)):
+            el["w"] = size
+        tex = spec["tex"] % i
+        if tex in profiles:
+            scene, fmt = profiles[tex]
+            el["file"] = "%s/%s.%s" % (scene, tex, fmt)
+        out.append(el)
+    return out
+
+
+def _invert_baseline_arrays(layout, edited):
+    """Fold equal-spaced array children ("<key>.<i>") back into the layout's
+    shared cx (center) + gap (spacing) + offset. Needs ALL children at once:
+    gap = (last.cx - first.cx)/(count-1); cx = mean of child centers; offset from
+    any child's cy. Children with a missing/partial set are folded best-effort."""
+    for key, spec in _BASELINE_ARRAYS.items():
+        row = layout.get(key)
+        if not isinstance(row, dict):
+            continue
+        prefix = key + _ROW_SEP
+        kids = []
+        for eid, el in edited.items():
+            if not eid.startswith(prefix):
+                continue
+            idx = eid[len(prefix):]
+            if idx.isdigit() and "cx" in el:
+                kids.append((int(idx), el))
+        if not kids:
+            continue
+        kids.sort(key=lambda p: p[0])
+        xs = [float(el["cx"]) for _, el in kids]
+        # center = mean of the child centers (exact for a symmetric equal-spaced set).
+        row["cx"] = round(sum(xs) / len(xs), 4)
+        # spacing from the span between the extreme children.
+        if len(kids) >= 2:
+            span_i = kids[-1][0] - kids[0][0]
+            if span_i > 0:
+                row["gap"] = round((xs[-1] - xs[0]) / span_i, 4)
+        # shared offset from any child's cy.
+        cy = next((float(el["cy"]) for _, el in kids if isinstance(el.get("cy"), (int, float))), None)
+        if cy is not None:
+            off = cy if spec["group"] == "top" else 1.0 - cy
+            row[spec["offset"]] = round(off, 4)
 
 
 def _project_baseline_element(key, v, baseline_ratio):
@@ -217,10 +329,19 @@ def build_source_manifest(source):
         if key in _LAYOUT_META_KEYS or not isinstance(v, dict):
             continue
         if is_baseline:
-            # baseline element: project its offset → a literal cy for the editor.
+            # Multi-point row (resourceBar/arrows/tabs): explode into one draggable
+            # child per x field, then done with this key.
+            if key in _BASELINE_ROWS:
+                elements.extend(_project_baseline_row(key, v, baseline_ratio, profiles))
+                continue
+            # Equal-spaced array (chests): explode into N icons sharing cx/gap/size.
+            if key in _BASELINE_ARRAYS:
+                elements.extend(_project_baseline_array(key, v, baseline_ratio, profiles))
+                continue
+            # baseline single-point element: project its offset → a literal cy.
             cy = _project_baseline_element(key, v, baseline_ratio)
             if cy is None:
-                continue  # edge-pinned row / no single-point cx: not editable here
+                continue  # no single-point cx: not editable here
             el = {"id": key, "cx": v.get("cx"), "cy": cy}
             for fld in ("w", "h", "rotation"):
                 if fld in v:
@@ -302,7 +423,31 @@ def write_source_manifest(source, manifest):
                 layout["bg"]["anchorY"] = round(ratio, 4)
         baseline_ratio = _num(layout.get("baselineRatio"), 0.5)
 
+    # Equal-spaced arrays need ALL their children together to re-derive the shared
+    # cx (center) + gap (spacing), so aggregate them first, then fold in one shot.
+    if is_baseline:
+        _invert_baseline_arrays(layout, edited)
+
     for key, el in edited.items():
+        # Array child ("<key>.<i>"): handled in the aggregate pass above; skip.
+        if is_baseline and _ROW_SEP in key and key.split(_ROW_SEP, 1)[0] in _BASELINE_ARRAYS:
+            continue
+        # Multi-point row child ("<row>.<field>"): write cx back to the row's x
+        # field, and re-derive the row's shared offset from cy. Several children
+        # share one offset; writing the same value repeatedly is harmless.
+        if is_baseline and _ROW_SEP in key:
+            row_key, field = key.split(_ROW_SEP, 1)
+            spec = _BASELINE_ROWS.get(row_key)
+            row = layout.get(row_key)
+            if spec and isinstance(row, dict) and any(field == f for f, _ in spec["points"]):
+                if "cx" in el:
+                    row[field] = round(float(el["cx"]), 4)
+                if isinstance(el.get("cy"), (int, float)):
+                    cy = float(el["cy"])
+                    off = cy if spec["group"] == "top" else 1.0 - cy
+                    row[spec["offset"]] = round(off, 4)
+            continue
+
         target = layout.get(key)
         if not isinstance(target, dict):
             # A key the source layout doesn't have yet: an element the editor
