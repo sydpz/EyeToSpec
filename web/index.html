@@ -54,15 +54,49 @@
       return a;
     }
 
+    function groupBlock(group) {
+      const section = document.createElement('section');
+      section.className = 'group-block';
+      const head = document.createElement('div');
+      head.className = 'group-head';
+      head.innerHTML = `
+        <span class="group-name"></span>
+        <span class="group-count">${group.frames.length} frames</span>`;
+      head.querySelector('.group-name').textContent = group.name;
+      section.appendChild(head);
+      if (group.description) {
+        const d = document.createElement('p');
+        d.className = 'group-desc';
+        d.textContent = group.description;
+        section.appendChild(d);
+      }
+      const inner = document.createElement('div');
+      inner.className = 'pack-grid';
+      group.frames.forEach((f, i) => {
+        const c = card(f);
+        // enter any frame; the editor then walks the rest via next / prev
+        const tag = document.createElement('span');
+        tag.className = 'frame-index';
+        tag.textContent = (i + 1) + ' / ' + group.frames.length;
+        c.querySelector('.pack-card-top').appendChild(tag);
+        inner.appendChild(c);
+      });
+      section.appendChild(inner);
+      return section;
+    }
+
     fetch('/api/packs')
       .then(r => r.json())
       .then(data => {
         grid.innerHTML = '';
-        if (!data.packs || data.packs.length === 0) {
+        const packs = data.packs || [];
+        const groups = data.groups || [];
+        if (packs.length === 0 && groups.length === 0) {
           grid.innerHTML = '<div class="empty">No packs found. Drop a folder with a <code>pack.json</code> into <code>config/</code> and refresh.</div>';
           return;
         }
-        data.packs.forEach(p => grid.appendChild(card(p)));
+        packs.forEach(p => grid.appendChild(card(p)));
+        groups.forEach(g => grid.appendChild(groupBlock(g)));
       })
       .catch(err => {
         grid.innerHTML = '<div class="empty error">Failed to load packs: ' + err + '</div>';

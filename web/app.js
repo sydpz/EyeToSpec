@@ -137,6 +137,7 @@ async function init() {
   drawAnchorLine();
   layoutStage();
   renderElements();
+  setupFrameNav();
   renderList();
   window.addEventListener('resize', layoutStage);
   wireToolbar();
@@ -154,6 +155,49 @@ async function init() {
         .then(() => { layoutStage(); setTimeout(() => { window.__ready = true; }, 120); });
     });
   }
+}
+
+// Frame navigation: when this pack is a group frame ("<group>/<frame>"), wire
+// the Prev/Next buttons to walk the group's ordered frames. Standalone packs
+// (no "/") leave the nav hidden. In render mode we skip it (agent preview only).
+async function setupFrameNav() {
+  const nav = document.getElementById('frame-nav');
+  if (!nav || RENDER_MODE) return;
+  const slash = PACK_ID.indexOf('/');
+  if (slash < 0) return;
+  const groupId = PACK_ID.slice(0, slash);
+
+  let groups = [];
+  try {
+    groups = (await fetch('/api/packs').then(r => r.json())).groups || [];
+  } catch (e) { return; }
+  const group = groups.find(g => g.id === groupId);
+  if (!group || !group.frames.length) return;
+
+  const idx = group.frames.findIndex(f => f.id === PACK_ID);
+  if (idx < 0) return;
+
+  document.getElementById('frame-progress').textContent =
+    (idx + 1) + ' / ' + group.frames.length;
+
+  const go = (i) => {
+    const target = group.frames[i];
+    if (target) location.href = 'editor.html?pack=' + encodeURIComponent(target.id);
+  };
+  const prevBtn = document.getElementById('prev-frame');
+  const nextBtn = document.getElementById('next-frame');
+  prevBtn.disabled = idx === 0;
+  nextBtn.disabled = idx === group.frames.length - 1;
+  prevBtn.onclick = () => go(idx - 1);
+  nextBtn.onclick = () => go(idx + 1);
+  // arrow keys walk frames too (ignored while typing in an input)
+  window.addEventListener('keydown', (e) => {
+    if (e.target.matches('input, textarea')) return;
+    if (e.key === 'ArrowLeft' && idx > 0) go(idx - 1);
+    if (e.key === 'ArrowRight' && idx < group.frames.length - 1) go(idx + 1);
+  });
+
+  nav.hidden = false;
 }
 
 function num(...vals) {

@@ -51,30 +51,80 @@ def content_type_for(path):
     return CONTENT_TYPES.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
 
 
+def _read_pack_entry(pack_id, manifest_path):
+    """Build a pack list entry from a pack.json, or None if unreadable."""
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    has_export = os.path.isfile(os.path.join(OUTPUT_DIR, pack_id + ".json"))
+    return {
+        "id": pack_id,
+        "name": data.get("name", pack_id),
+        "description": data.get("description", ""),
+        "elementCount": len(data.get("elements", [])),
+        "exported": has_export,
+    }
+
+
+def read_group(group_dir):
+    """Read an optional group.json (name/description/order) from a group dir."""
+    path = os.path.join(group_dir, "group.json")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def list_packs():
-    """Return every valid asset pack under ./config (one dir with a pack.json)."""
+    """Scan ./config for packs, at most one level deep.
+
+    A top-level dir with a pack.json is a standalone pack (id = "<name>").
+    A top-level dir WITHOUT pack.json is a *group*: its child dirs that have a
+    pack.json become frames (id = "<group>/<frame>"), returned as a group with an
+    ordered `frames` list. A group.json may set the group name/description and an
+    explicit frame `order`."""
     packs = []
+    groups = []
     if not os.path.isdir(CONFIG_DIR):
-        return packs
+        return {"packs": packs, "groups": groups}
     for name in sorted(os.listdir(CONFIG_DIR)):
         pack_dir = os.path.join(CONFIG_DIR, name)
+        if not os.path.isdir(pack_dir):
+            continue
         manifest = os.path.join(pack_dir, "pack.json")
-        if not os.path.isfile(manifest):
+        if os.path.isfile(manifest):
+            entry = _read_pack_entry(name, manifest)
+            if entry:
+                packs.append(entry)
             continue
-        try:
-            with open(manifest, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError):
+        # no pack.json here -> treat as a group of frame subdirs
+        meta = read_group(pack_dir)
+        frames = []
+        for child in sorted(os.listdir(pack_dir)):
+            child_manifest = os.path.join(pack_dir, child, "pack.json")
+            if os.path.isfile(child_manifest):
+                entry = _read_pack_entry(name + "/" + child, child_manifest)
+                if entry:
+                    entry["frame"] = child
+                    frames.append(entry)
+        if not frames:
             continue
-        has_export = os.path.isfile(os.path.join(OUTPUT_DIR, name + ".json"))
-        packs.append({
+        order = meta.get("order")
+        if isinstance(order, list):
+            rank = {f: i for i, f in enumerate(order)}
+            frames.sort(key=lambda e: (rank.get(e["frame"], len(order)), e["frame"]))
+        groups.append({
             "id": name,
-            "name": data.get("name", name),
-            "description": data.get("description", ""),
-            "elementCount": len(data.get("elements", [])),
-            "exported": has_export,
+            "name": meta.get("name", name),
+            "description": meta.get("description", ""),
+            "frames": frames,
         })
-    return packs
+    return {"packs": packs, "groups": groups}
 
 
 def read_manifest(pack_id):
@@ -84,8 +134,16 @@ def read_manifest(pack_id):
 
 
 def is_safe_id(pack_id):
-    """A pack id is a single directory name — reject anything with path parts."""
-    return bool(pack_id) and "/" not in pack_id and "\\" not in pack_id and pack_id not in (".", "..")
+    """A pack id is one dir name, or a group/frame pair ("group/frame").
+
+    Allows at most one "/" so grouped frame sequences work; still rejects
+    backslashes, "." / ".." segments, and empties."""
+    if not pack_id or "\\" in pack_id:
+        return False
+    parts = pack_id.split("/")
+    if len(parts) > 2:
+        return False
+    return all(p and p not in (".", "..") for p in parts)
 
 
 def find_chrome():
@@ -112,7 +170,7 @@ def render_screenshot(port, pack_id, width, height, safe=None, capsule=None, bas
     chrome = find_chrome()
     if not chrome:
         raise RuntimeError("no Chrome/Chromium found for --headless screenshot")
-    url = "http://127.0.0.1:%d/editor.html?pack=%s&render=1" % (port, pack_id)
+    url = "http://127.0.0.1:%d/editor.html?pack=%s&render=1" % (port, quote(pack_id, safe=""))
     if safe:
         url += "&safe=" + quote(safe, safe=":,")
     if capsule:
@@ -182,7 +240,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(os.path.join(WEB_DIR, "index.html"))
 
         if path == "/api/packs":
-            return self.send_json({"packs": list_packs()})
+            return self.send_json(list_packs())
 
         if path.startswith("/api/pack/"):
             pack_id = path[len("/api/pack/"):]
@@ -195,14 +253,21 @@ class Handler(BaseHTTPRequestHandler):
             except json.JSONDecodeError as exc:
                 return self.send_json({"error": "invalid pack.json: %s" % exc}, status=500)
 
-        # asset files for a pack: /assets/<pack>/<...>
+        # asset files for a pack: /assets/<pack>/<file> where <pack> is one dir
+        # ("shop") or a group/frame pair ("guide/f01"). Try the two-segment pack
+        # id first (grouped frame), then fall back to the single-segment pack.
         if path.startswith("/assets/"):
             rel = path[len("/assets/"):]
-            parts = rel.split("/", 1)
-            if len(parts) == 2 and is_safe_id(parts[0]):
-                pack_dir = os.path.join(CONFIG_DIR, parts[0], "assets")
-                abspath = os.path.normpath(os.path.join(pack_dir, parts[1]))
-                if abspath.startswith(pack_dir + os.sep):
+            segs = rel.split("/")
+            for depth in (2, 1):
+                if len(segs) <= depth:
+                    continue
+                pack_id = "/".join(segs[:depth])
+                if not is_safe_id(pack_id):
+                    continue
+                pack_dir = os.path.join(CONFIG_DIR, *segs[:depth], "assets")
+                abspath = os.path.normpath(os.path.join(pack_dir, *segs[depth:]))
+                if abspath.startswith(pack_dir + os.sep) and os.path.isfile(abspath):
                     return self.send_file(abspath)
             return self.send_json({"error": "not found"}, status=404)
 
@@ -262,8 +327,8 @@ class Handler(BaseHTTPRequestHandler):
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
             except (ValueError, json.JSONDecodeError):
                 return self.send_json({"error": "invalid json body"}, status=400)
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
             out = os.path.join(OUTPUT_DIR, pack_id + ".json")
+            os.makedirs(os.path.dirname(out), exist_ok=True)
             with open(out, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
                 f.write("\n")
@@ -301,7 +366,9 @@ def main():
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     url = "http://localhost:%d/" % args.port
-    packs = list_packs()
+    listing = list_packs()
+    packs = listing["packs"]
+    groups = listing["groups"]
 
     print("\n  EyeToSpec  —  drag it where it looks right, export the coordinates\n")
     print("  serving   %s" % url)
@@ -312,10 +379,15 @@ def main():
         return os.path.relpath(p, ROOT) if inside else p
     print("  config    %s" % show(CONFIG_DIR))
     print("  output    %s" % show(OUTPUT_DIR))
-    if packs:
-        print("\n  %d pack(s) found:" % len(packs))
-        for p in packs:
-            print("    - %s  (%d elements)" % (p["id"], p["elementCount"]))
+    if packs or groups:
+        if packs:
+            print("\n  %d pack(s) found:" % len(packs))
+            for p in packs:
+                print("    - %s  (%d elements)" % (p["id"], p["elementCount"]))
+        for g in groups:
+            print("\n  group %s  (%d frames):" % (g["id"], len(g["frames"])))
+            for f in g["frames"]:
+                print("    - %s  (%d elements)" % (f["id"], f["elementCount"]))
     else:
         print("\n  no packs found — drop a folder with a pack.json into ./config")
     print("\n  Ctrl+C to stop\n")
