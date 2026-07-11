@@ -19,7 +19,13 @@
     <div class="editor-actions">
       <button id="reset-btn" class="btn btn-ghost" title="Reload seed positions from pack.json">Reset</button>
       <button id="export-btn" class="btn btn-ghost" title="Show / copy the coordinate JSON">JSON</button>
-      <button id="save-btn" class="btn btn-primary" title="Write output/&lt;pack&gt;.json">💾 Save</button>
+      <div class="save-split">
+        <button id="save-btn" class="btn btn-primary" title="Write changes back into pack.json (clears the output overlay)">💾 Save to pack</button>
+        <button id="save-menu-btn" class="btn btn-primary save-caret" title="More save options" aria-haspopup="true">▾</button>
+        <div id="save-menu" class="save-menu" hidden>
+          <button id="save-diff-btn" title="Write only output/&lt;pack&gt;.json — pack.json untouched">Save diff (incremental)</button>
+        </div>
+      </div>
     </div>
   </header>
 

@@ -121,6 +121,19 @@ hand-authored source of truth, untouched**:
 On load the element set is `pack.json elements ∪ output._added`, with each
 element's `enabled` and geometry overlaid from `output/`.
 
+### Two ways to Save
+
+The Save button is a split control:
+
+- **💾 Save to pack** (default) — folds everything back into `pack.json`:
+  deleted elements are removed for good, duplicates become first-class pack
+  elements, and geometry is written in. The `output/` overlay is then cleared,
+  so `pack.json` is once again the clean single source of truth. Confirms first
+  (it edits your hand-authored file) and reloads.
+- **▾ → Save diff (incremental)** — writes only `output/<id>.json`
+  (geometry + `enabled` + `_added` overlay) and leaves `pack.json` untouched.
+  Use this while iterating; write back to the pack when the layout settles.
+
 ## Scope
 
 EyeToSpec does one thing: **turn your visual judgment into a coordinate spec.**

@@ -755,8 +755,56 @@ function buildOutput() {
 
 function round(n) { return Math.round(n * 1000) / 1000; }
 
+// Build a fresh pack.json from the current working state (for write-back Save).
+// Disabled elements are dropped (real delete); duplicates become first-class
+// pack elements; geometry is folded in so output/ can be cleared afterwards.
+function buildPackManifest() {
+  const { w: CW, h: CH } = canvasPx();
+  const out = Object.assign({}, manifest);   // preserve name/description/canvas/…
+  out.elements = [];
+  for (const el of elements) {
+    if (el.enabled === false) continue;       // real delete on write-back
+    let h = el.h;
+    if (h == null) {
+      const node = nodes.get(el.id);
+      h = node ? round(node.offsetHeight / CH) : undefined;
+    }
+    // start from the element's own persisted fields, minus editor-internal ones
+    const def = {};
+    for (const k of Object.keys(el)) {
+      if (k === 'enabled' || k === '_added' || k.startsWith('_')) continue;
+      def[k] = el[k];
+    }
+    def.cx = round(el.cx); def.cy = round(el.cy); def.w = round(el.w);
+    if (h != null) def.h = h; else delete def.h;
+    if (el.rotation) def.rotation = Math.round(el.rotation * 10) / 10; else delete def.rotation;
+    def.flipH = el.flipH || undefined;
+    def.flipV = el.flipV || undefined;
+    if (def.flipH === undefined) delete def.flipH;
+    if (def.flipV === undefined) delete def.flipV;
+    if (el.anchor && el.anchor !== 'baseline') def.anchor = el.anchor; else delete def.anchor;
+    out.elements.push(def);
+  }
+  // fold the baseline/elastic-zone into the manifest too
+  if (anchorCy != null) {
+    if (LINE_KIND === 'divider') out.elasticZone = { topCy: round(anchorCy), minH: round(ELASTIC_MIN_H) };
+    else out.anchorLine = { cx: 0.5, cy: round(anchorCy), w: 1, h: 0.04 };
+  }
+  return out;
+}
+
 function wireToolbar() {
   document.getElementById('save-btn').addEventListener('click', save);
+  const menu = document.getElementById('save-menu');
+  document.getElementById('save-menu-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.hidden = !menu.hidden;
+  });
+  document.getElementById('save-diff-btn').addEventListener('click', () => {
+    menu.hidden = true;
+    saveDiff();
+  });
+  document.addEventListener('click', () => { menu.hidden = true; });   // click-away
   document.getElementById('export-btn').addEventListener('click', showJson);
   document.getElementById('reset-btn').addEventListener('click', resetSeed);
   document.getElementById('close-modal').addEventListener('click', () =>
@@ -773,14 +821,46 @@ function showJson() {
   document.getElementById('json-modal').hidden = false;
 }
 
+// Default Save = write back to pack.json (fold in deletes/duplicates/geometry,
+// then clear the output overlay). This edits the hand-authored source, so it
+// confirms first and reloads to the fresh pack afterward.
 async function save() {
+  const hasDeletes = elements.some(e => e.enabled === false);
+  const hasAdds = elements.some(e => e._added);
+  const extra = hasDeletes || hasAdds
+    ? '\n\nDeleted elements are removed for good; duplicates become permanent.'
+    : '';
+  if (!confirm('Write these changes back into pack.json?' + extra +
+      '\n\nThe output/ overlay for this pack will be cleared. (Use ▾ → Save diff to keep pack.json untouched.)')) {
+    return;
+  }
+  try {
+    const res = await fetch('/api/writepack/' + encodeURIComponent(PACK_ID), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildPackManifest()),
+    }).then(r => r.json());
+    if (res.ok) {
+      toast('Written → ' + res.path + ' · reloading…');
+      setTimeout(() => location.reload(), 600);
+    } else {
+      toast('Write-back failed: ' + (res.error || '?'), true);
+    }
+  } catch (e) {
+    toast('Write-back failed: ' + e, true);
+  }
+}
+
+// Incremental Save = write only output/<id>.json (geometry + enabled + _added
+// overlay); pack.json stays untouched. The "keep it a diff" option.
+async function saveDiff() {
   try {
     const res = await fetch('/api/save/' + encodeURIComponent(PACK_ID), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(buildOutput()),
     }).then(r => r.json());
-    if (res.ok) toast('Saved → ' + res.path);
+    if (res.ok) toast('Saved diff → ' + res.path);
     else toast('Save failed: ' + (res.error || '?'), true);
   } catch (e) {
     toast('Save failed: ' + e, true);

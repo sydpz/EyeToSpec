@@ -129,6 +129,22 @@ code {
 .editor-title .pack-id { color: var(--text-faint); font-size: 0.78rem; }
 .editor-actions { display: flex; gap: 0.5rem; }
 
+/* split Save button + dropdown */
+.save-split { position: relative; display: flex; }
+.save-split .save-btn, .save-split #save-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.save-caret { border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: 0.5rem; padding-right: 0.5rem; border-left: 1px solid rgba(255,255,255,0.25); }
+.save-menu {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 20;
+  background: var(--bg-elev-2, #1c1f26); border: 1px solid var(--border-strong, #333);
+  border-radius: 8px; padding: 0.3rem; min-width: 12rem; box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+}
+.save-menu button {
+  display: block; width: 100%; text-align: left; background: none; border: none;
+  color: var(--text, #e8eaed); font: inherit; font-size: 0.84rem; padding: 0.5rem 0.6rem;
+  border-radius: 6px; cursor: pointer;
+}
+.save-menu button:hover { background: var(--bg-elev-1, #262a33); }
+
 .btn {
   font: inherit;
   font-size: 0.86rem;
