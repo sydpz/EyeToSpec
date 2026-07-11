@@ -211,17 +211,30 @@ def write_source_manifest(source, manifest):
     with open(layout_path, "r", encoding="utf-8") as f:
         layout = json.load(f)
     edited = {el["id"]: el for el in manifest.get("elements", []) if isinstance(el, dict) and "id" in el}
+    added = 0
     for key, el in edited.items():
         target = layout.get(key)
         if not isinstance(target, dict):
-            continue  # editor can't invent new layout keys; skip unknowns
+            # A key the source layout doesn't have yet: an element the editor
+            # created (Duplicate → "<id>-copy"). Materialize it as a real layout
+            # entry so it survives the round-trip. The manifest carries `file`
+            # (scene/tex.fmt) not `tex`, so recover the game's `tex` from the
+            # filename stem — the exact inverse of build_source_manifest.
+            if key in _LAYOUT_META_KEYS:
+                continue  # never overwrite page metadata via a stray element id
+            target = {}
+            file = el.get("file")
+            if isinstance(file, str) and file:
+                target["tex"] = os.path.splitext(os.path.basename(file))[0]
+            layout[key] = target
+            added += 1
         for fld in _ELEM_PASS:
             if fld in el:
                 target[fld] = el[fld]
     with open(layout_path, "w", encoding="utf-8") as f:
         json.dump(layout, f, ensure_ascii=False, indent=2)
         f.write("\n")
-    return layout_path
+    return layout_path, added
 
 
 def list_packs():
@@ -548,12 +561,12 @@ class Handler(BaseHTTPRequestHandler):
             out = os.path.join(OUTPUT_DIR, pack_id + ".json")
             if source:
                 try:
-                    layout_path = write_source_manifest(source, manifest)
+                    layout_path, added = write_source_manifest(source, manifest)
                 except (OSError, ValueError, json.JSONDecodeError) as e:
                     return self.send_json({"error": "write-back failed: %s" % e}, status=500)
                 if os.path.isfile(out):
                     os.remove(out)  # overlay folded into source; drop it
-                return self.send_json({"ok": True, "path": layout_path, "source": True})
+                return self.send_json({"ok": True, "path": layout_path, "source": True, "added": added})
             # Standalone pack: overwrite its pack.json (hand-authored snapshot).
             pack_path = os.path.join(pack_dir, "pack.json")
             with open(pack_path, "w", encoding="utf-8") as f:
