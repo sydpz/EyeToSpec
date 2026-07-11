@@ -52,13 +52,25 @@ def content_type_for(path):
     return CONTENT_TYPES.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
 
 
-def _read_pack_entry(pack_id, manifest_path):
-    """Build a pack list entry from a pack.json, or None if unreadable."""
-    try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
+def _read_pack_entry(pack_id, pack_dir):
+    """Build a pack list entry from a dir holding a pack.json OR a source.json
+    (live game-config pointer). Returns None if neither is readable."""
+    manifest_path = os.path.join(pack_dir, "pack.json")
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+    else:
+        source = read_source(pack_dir)
+        if not source:
+            return None
+        try:
+            data, _ = build_source_manifest(source)
+        except (OSError, json.JSONDecodeError):
+            return None
+        data["live"] = True
     has_export = os.path.isfile(os.path.join(OUTPUT_DIR, pack_id + ".json"))
     return {
         "id": pack_id,
@@ -66,6 +78,7 @@ def _read_pack_entry(pack_id, manifest_path):
         "description": data.get("description", ""),
         "elementCount": len(data.get("elements", [])),
         "exported": has_export,
+        "live": bool(data.get("live")),
     }
 
 
@@ -79,6 +92,93 @@ def read_group(group_dir):
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return {}
+
+
+# ---------------------------------------------------------------------------
+# Source-backed packs: a pack dir may hold a source.json instead of a pack.json.
+# It points at a game layout config (the SINGLE SOURCE OF TRUTH) which EyeToSpec
+# reads LIVE and converts to a pack manifest at request time — zero copy, zero
+# drift. The game's keyed-object layout ({avatar:{cx,cy,w},...}) becomes
+# elements:[{id,cx,cy,w,...}]; each element's `tex` (texture key) is resolved to
+# a real file via the repo's asset-profiles.json + resourceRoot, both named in
+# the config's own `_eyetospec` block.
+# ---------------------------------------------------------------------------
+
+# Top-level layout keys that are page metadata, not placeable elements.
+_LAYOUT_META_KEYS = {"_comment", "_eyetospec", "mode", "elasticZone"}
+# Element fields passed through verbatim into the manifest.
+_ELEM_PASS = ("cx", "cy", "w", "h", "anchor", "rotation", "text", "color",
+              "align", "fontSize", "fontFamily", "fontWeight", "stroke",
+              "strokeWidth", "shadow", "fill", "alpha", "radius")
+
+
+def _expand(path):
+    return os.path.abspath(os.path.expanduser(path))
+
+
+def read_source(pack_dir):
+    """Read an optional source.json (live game-config pointer). {} if absent."""
+    path = os.path.join(pack_dir, "source.json")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _load_asset_profiles(profiles_path):
+    """key -> (scene subdir, format) from the repo's asset-profiles.json."""
+    out = {}
+    try:
+        with open(profiles_path, "r", encoding="utf-8") as f:
+            for p in json.load(f):
+                out[p.get("key")] = (p.get("scene"), p.get("format", "png"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+    return out
+
+
+def build_source_manifest(source):
+    """Turn a source.json into a live pack manifest read from the game config.
+
+    Returns (manifest_dict, resource_root_abspath). Raises FileNotFoundError if
+    the layout file is missing."""
+    repo = _expand(source.get("repo", "~"))
+    layout_path = os.path.join(repo, source.get("layout", ""))
+    with open(layout_path, "r", encoding="utf-8") as f:
+        layout = json.load(f)
+
+    meta = layout.get("_eyetospec", {}) if isinstance(layout, dict) else {}
+    canvas = meta.get("canvas", {"w": 720, "h": 1280})
+    resource_root = _expand(os.path.join(repo, meta.get("resourceRoot", "")))
+    profiles = _load_asset_profiles(_expand(os.path.join(repo, meta.get("assetProfiles", "")))) \
+        if meta.get("assetProfiles") else {}
+
+    elements = []
+    for key, v in layout.items():
+        if key in _LAYOUT_META_KEYS or not isinstance(v, dict):
+            continue
+        if "cx" not in v or "cy" not in v:
+            continue
+        el = {"id": key}
+        for fld in _ELEM_PASS:
+            if fld in v:
+                el[fld] = v[fld]
+        tex = v.get("tex")
+        if tex and tex in profiles:
+            scene, fmt = profiles[tex]
+            el["file"] = "%s/%s.%s" % (scene, tex, fmt)  # relative to resourceRoot
+        elements.append(el)
+
+    manifest = {
+        "name": source.get("name") or meta.get("name") or "",
+        "description": source.get("_comment", ""),
+        "canvas": canvas,
+        "elements": elements,
+    }
+    return manifest, resource_root
 
 
 def list_packs():
@@ -97,19 +197,23 @@ def list_packs():
         pack_dir = os.path.join(CONFIG_DIR, name)
         if not os.path.isdir(pack_dir):
             continue
-        manifest = os.path.join(pack_dir, "pack.json")
-        if os.path.isfile(manifest):
-            entry = _read_pack_entry(name, manifest)
+        # a dir with pack.json OR source.json is a standalone pack
+        if os.path.isfile(os.path.join(pack_dir, "pack.json")) or \
+                os.path.isfile(os.path.join(pack_dir, "source.json")):
+            entry = _read_pack_entry(name, pack_dir)
             if entry:
                 packs.append(entry)
             continue
-        # no pack.json here -> treat as a group of frame subdirs
+        # otherwise -> treat as a group of frame subdirs
         meta = read_group(pack_dir)
         frames = []
         for child in sorted(os.listdir(pack_dir)):
-            child_manifest = os.path.join(pack_dir, child, "pack.json")
-            if os.path.isfile(child_manifest):
-                entry = _read_pack_entry(name + "/" + child, child_manifest)
+            child_dir = os.path.join(pack_dir, child)
+            if not os.path.isdir(child_dir):
+                continue
+            if os.path.isfile(os.path.join(child_dir, "pack.json")) or \
+                    os.path.isfile(os.path.join(child_dir, "source.json")):
+                entry = _read_pack_entry(name + "/" + child, child_dir)
                 if entry:
                     entry["frame"] = child
                     frames.append(entry)
@@ -129,9 +233,18 @@ def list_packs():
 
 
 def read_manifest(pack_id):
-    manifest = os.path.join(CONFIG_DIR, pack_id, "pack.json")
-    with open(manifest, "r", encoding="utf-8") as f:
-        return json.load(f)
+    pack_dir = os.path.join(CONFIG_DIR, *pack_id.split("/"))
+    manifest = os.path.join(pack_dir, "pack.json")
+    if os.path.isfile(manifest):
+        with open(manifest, "r", encoding="utf-8") as f:
+            return json.load(f)
+    # live source-backed pack: build the manifest from the game config now.
+    source = read_source(pack_dir)
+    if source:
+        data, _ = build_source_manifest(source)
+        data["live"] = True
+        return data
+    raise FileNotFoundError(manifest)
 
 
 def is_safe_id(pack_id):
@@ -285,7 +398,20 @@ class Handler(BaseHTTPRequestHandler):
                 pack_id = "/".join(segs[:depth])
                 if not is_safe_id(pack_id):
                     continue
-                pack_dir = os.path.join(CONFIG_DIR, *segs[:depth], "assets")
+                config_pack_dir = os.path.join(CONFIG_DIR, *segs[:depth])
+                # Live source-backed pack: files live in the game repo's
+                # resourceRoot, not the pack's own assets/ dir.
+                source = read_source(config_pack_dir)
+                if source:
+                    try:
+                        _, resource_root = build_source_manifest(source)
+                    except (OSError, json.JSONDecodeError):
+                        continue
+                    abspath = os.path.normpath(os.path.join(resource_root, *segs[depth:]))
+                    if abspath.startswith(resource_root + os.sep) and os.path.isfile(abspath):
+                        return self.send_file(abspath)
+                    continue
+                pack_dir = os.path.join(config_pack_dir, "assets")
                 abspath = os.path.normpath(os.path.join(pack_dir, *segs[depth:]))
                 if abspath.startswith(pack_dir + os.sep) and os.path.isfile(abspath):
                     return self.send_file(abspath)

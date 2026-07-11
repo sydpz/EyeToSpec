@@ -1,0 +1,5 @@
+{
+  "name": "Absolute-TD 定稿(live)",
+  "description": "直读游戏仓库的 *-layout.json,零拷贝。config=唯一真源:代码照它渲染,EyeToSpec 也照它渲染。每个子目录一个 source.json 指向游戏里的 config 文件。",
+  "order": ["shop"]
+}

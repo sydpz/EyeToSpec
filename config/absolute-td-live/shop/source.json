@@ -1,0 +1,6 @@
+{
+  "_comment": "商店页定稿。EyeToSpec 直读下面这个游戏 config 渲染(不拷贝)。canvas/resourceRoot/assetProfiles 从该 config 的 _eyetospec 块读取,所以 config 仍是唯一真源。改游戏 config→刷新 EyeToSpec 即同步。",
+  "name": "商店 Shop(live)",
+  "repo": "~/github/absolute-td",
+  "layout": "apps/web-client/src/scenes/shop-layout.json"
+}
