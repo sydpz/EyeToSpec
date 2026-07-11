@@ -1,5 +1,11 @@
 # EyeToSpec
 
+# Config packs are local working data, not source.
+# Only the reference pack `search-home` is tracked; ignore everything else.
+/config/*
+!/config/search-home
+!/config/search-home/**
+
 # Exported coordinates are user output, not source.
 # Keep the folder, ignore its contents.
 /output/*
