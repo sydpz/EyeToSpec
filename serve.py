@@ -105,11 +105,63 @@ def read_group(group_dir):
 # ---------------------------------------------------------------------------
 
 # Top-level layout keys that are page metadata, not placeable elements.
-_LAYOUT_META_KEYS = {"_comment", "_eyetospec", "mode", "elasticZone"}
+_LAYOUT_META_KEYS = {"_comment", "_eyetospec", "mode", "elasticZone",
+                     "baselineRatio", "bg"}
 # Element fields passed through verbatim into the manifest.
 _ELEM_PASS = ("cx", "cy", "w", "h", "anchor", "rotation", "text", "color",
               "align", "fontSize", "fontFamily", "fontWeight", "stroke",
               "strokeWidth", "shadow", "fill", "alpha", "radius")
+
+# --- baseline-layout projection (mode == "baseline-layout") -----------------
+# The home page is a baseline-layout config: elements carry NO literal `cy`, they
+# carry an offset against one of three anchor groups (center → baselineRatio,
+# top → safe-area top, bottom → screen bottom). The editor only knows literal
+# normalized cy, so we PROJECT each single-point element's offset into a cy for
+# display/drag, and INVERT it on save. Because the pack canvas height is chosen
+# to equal the game bg width-locked display height, originY/H == baselineRatio
+# and every offset (a fraction of H) maps to a cy by simple add/subtract — no
+# screen-height term. The draggable baseline (anchorLine.cy) seeds to
+# baselineRatio: dragging it re-pins the hen AND marks the bg nest (they converge
+# in this matched space), and on save writes back baselineRatio + bg.anchorY.
+# Only elements with a single-point `cx` participate (hen/banner/avatar/chests/
+# start); edge-pinned multi-point rows (resourceBar/arrows/tabs, keyed by
+# left/right/leftX/...) don't align to the background, so they're left out of the
+# editor this pass.
+_BASELINE_CENTER = ("hen", "banner")          # cy = baselineRatio + offsetY
+_BASELINE_TOP = ("avatar",)                   # cy = offsetTop
+_BASELINE_BOTTOM = ("chests", "start")        # cy = 1 - offsetBottom
+
+
+def _project_baseline_element(key, v, baseline_ratio):
+    """Project one baseline element {cx, offset*} → editor {cx, cy, w}. Returns
+    None for elements without a single-point cx (edge-pinned rows are skipped)."""
+    if "cx" not in v:
+        return None
+    if key in _BASELINE_CENTER:
+        cy = baseline_ratio + _num(v.get("offsetY"), 0.0)
+    elif key in _BASELINE_TOP:
+        cy = _num(v.get("offsetTop"), 0.0)
+    elif key in _BASELINE_BOTTOM:
+        cy = 1.0 - _num(v.get("offsetBottom"), 0.0)
+    else:
+        return None
+    return cy
+
+
+def _invert_baseline_element(key, cy, baseline_ratio):
+    """Inverse of _project_baseline_element: editor cy → the game's offset field
+    as (field_name, value). Returns None if the key isn't a baseline element."""
+    if key in _BASELINE_CENTER:
+        return ("offsetY", cy - baseline_ratio)
+    if key in _BASELINE_TOP:
+        return ("offsetTop", cy)
+    if key in _BASELINE_BOTTOM:
+        return ("offsetBottom", 1.0 - cy)
+    return None
+
+
+def _num(v, d):
+    return v if isinstance(v, (int, float)) else d
 
 
 def _expand(path):
@@ -156,21 +208,40 @@ def build_source_manifest(source):
     profiles = _load_asset_profiles(_expand(os.path.join(repo, meta.get("assetProfiles", "")))) \
         if meta.get("assetProfiles") else {}
 
+    mode = layout.get("mode")
+    is_baseline = mode == "baseline-layout"
+    baseline_ratio = _num(layout.get("baselineRatio"), 0.5)
+
     elements = []
     for key, v in layout.items():
         if key in _LAYOUT_META_KEYS or not isinstance(v, dict):
             continue
-        if "cx" not in v or "cy" not in v:
-            continue
-        el = {"id": key}
-        for fld in _ELEM_PASS:
-            if fld in v:
-                el[fld] = v[fld]
+        if is_baseline:
+            # baseline element: project its offset → a literal cy for the editor.
+            cy = _project_baseline_element(key, v, baseline_ratio)
+            if cy is None:
+                continue  # edge-pinned row / no single-point cx: not editable here
+            el = {"id": key, "cx": v.get("cx"), "cy": cy}
+            for fld in ("w", "h", "rotation"):
+                if fld in v:
+                    el[fld] = v[fld]
+        else:
+            if "cx" not in v or "cy" not in v:
+                continue
+            el = {"id": key}
+            for fld in _ELEM_PASS:
+                if fld in v:
+                    el[fld] = v[fld]
         tex = v.get("tex")
         if tex and tex in profiles:
             scene, fmt = profiles[tex]
             el["file"] = "%s/%s.%s" % (scene, tex, fmt)  # relative to resourceRoot
         elements.append(el)
+
+    # Baseline pages: seed the draggable baseline at baselineRatio (== originY/H
+    # in the matched canvas). Owner drags it to the bg nest; save writes back
+    # baselineRatio + bg.anchorY together (they converge here).
+    baseline_seed = baseline_ratio if is_baseline else None
 
     manifest = {
         "name": source.get("name") or meta.get("name") or "",
@@ -178,6 +249,10 @@ def build_source_manifest(source):
         "canvas": canvas,
         "elements": elements,
     }
+    # Baseline pages expose a draggable baseline (app.js anchorLine); seed it at
+    # baselineRatio so the owner drags ONE line to pin hen + mark the bg nest.
+    if baseline_seed is not None:
+        manifest["anchorLine"] = {"cx": 0.5, "cy": baseline_seed, "w": 1, "h": 0.04}
     # Review-only safe-area overlay (notch / home indicator), fractions of canvas
     # height. Declared in the config's _eyetospec block so it travels with the
     # single source; the editor draws it when no ?safe= query overrides.
@@ -212,6 +287,21 @@ def write_source_manifest(source, manifest):
         layout = json.load(f)
     edited = {el["id"]: el for el in manifest.get("elements", []) if isinstance(el, dict) and "id" in el}
     added = 0
+
+    is_baseline = layout.get("mode") == "baseline-layout"
+    # Baseline pages: the dragged baseline (anchorLine.cy) is the new pin AND the
+    # bg nest anchor — write it back to BOTH baselineRatio and bg.anchorY so the
+    # game re-pins the hen and re-aligns the bg to the same line the owner marked.
+    # Read it BEFORE inverting elements (element offsets are relative to it).
+    if is_baseline:
+        line = manifest.get("anchorLine")
+        if isinstance(line, dict) and isinstance(line.get("cy"), (int, float)):
+            ratio = float(line["cy"])
+            layout["baselineRatio"] = round(ratio, 4)
+            if isinstance(layout.get("bg"), dict):
+                layout["bg"]["anchorY"] = round(ratio, 4)
+        baseline_ratio = _num(layout.get("baselineRatio"), 0.5)
+
     for key, el in edited.items():
         target = layout.get(key)
         if not isinstance(target, dict):
@@ -228,6 +318,19 @@ def write_source_manifest(source, manifest):
                 target["tex"] = os.path.splitext(os.path.basename(file))[0]
             layout[key] = target
             added += 1
+        if is_baseline:
+            # Invert the cy projection back into the element's offset field; cx/w
+            # pass through. (Elements not in a baseline group were never emitted,
+            # so they can't appear here.)
+            if "cx" in el:
+                target["cx"] = round(float(el["cx"]), 4)
+            if "w" in el:
+                target["w"] = round(float(el["w"]), 4)
+            if isinstance(el.get("cy"), (int, float)):
+                inv = _invert_baseline_element(key, float(el["cy"]), baseline_ratio)
+                if inv is not None:
+                    target[inv[0]] = round(inv[1], 4)
+            continue
         for fld in _ELEM_PASS:
             if fld in el:
                 target[fld] = el[fld]
