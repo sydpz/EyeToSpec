@@ -150,6 +150,33 @@ stays small, predictable, and easy to trust.
 3. Write a `pack.json` describing the canvas and elements.
 4. Restart `serve.py` — your pack appears in the list.
 
+### Frame sequences (grouped packs)
+
+To lay out an ordered sequence — an onboarding flow, a step-by-step tutorial,
+a storyboard — group the frames under one parent folder:
+
+```
+config/
+  onboarding/            # a group: no pack.json here
+    group.json           # optional: name, description, frame order
+    f01/  pack.json  assets/
+    f02/  pack.json  assets/
+    f03/  pack.json  assets/
+```
+
+A folder **without** a `pack.json` is treated as a group; each child folder that
+**has** one becomes a frame with id `onboarding/f01`. The landing page shows the
+group with its frames in order, and the editor gains **‹ Prev / Next ›** buttons
+(and left/right arrow keys) to walk the sequence. `group.json` is optional:
+
+```json
+{ "name": "Onboarding", "description": "first-run guide", "order": ["f01","f02","f03"] }
+```
+
+Without an explicit `order`, frames sort by folder name. Note the tool captures
+each frame's *static* layout only — transitions, highlights, and animation
+between frames are yours to build.
+
 Want to align a real page? Screenshot any site, slice out the pieces you care
 about, drop them in a pack, and rebuild the layout by eye. The exported
 coordinates are yours to hand off.

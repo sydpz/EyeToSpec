@@ -125,8 +125,10 @@ code {
   border-radius: 8px;
 }
 .back:hover { background: var(--bg-elev-2); color: var(--text); }
-.editor-title { display: flex; flex-direction: column; flex: 1; margin-left: 0.2rem; }
+.editor-title { display: flex; flex-direction: column; margin-left: 0.2rem; }
 .editor-title .pack-id { color: var(--text-faint); font-size: 0.78rem; }
+.frame-nav { display: flex; align-items: center; gap: 0.4rem; flex: 1; justify-content: center; }
+.frame-progress { color: var(--text-faint); font-size: 0.82rem; min-width: 3.2rem; text-align: center; font-variant-numeric: tabular-nums; }
 .editor-actions { display: flex; gap: 0.5rem; }
 
 /* split Save button + dropdown */
@@ -144,6 +146,14 @@ code {
   border-radius: 6px; cursor: pointer;
 }
 .save-menu button:hover { background: var(--bg-elev-1, #262a33); }
+
+/* group blocks on the landing page */
+.group-block { margin-top: 1.6rem; }
+.group-head { display: flex; align-items: baseline; gap: 0.6rem; margin-bottom: 0.2rem; }
+.group-head .group-name { font-size: 1.05rem; font-weight: 600; }
+.group-head .group-count { color: var(--text-faint); font-size: 0.8rem; }
+.group-desc { color: var(--text-faint); font-size: 0.85rem; margin: 0 0 0.7rem; }
+.frame-index { color: var(--text-faint); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
 
 .btn {
   font: inherit;
