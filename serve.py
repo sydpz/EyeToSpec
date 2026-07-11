@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse, parse_qs, quote
@@ -126,8 +127,14 @@ def render_screenshot(port, pack_id, width, height, safe=None, capsule=None, bas
     tmpdir = tempfile.mkdtemp(prefix="e2s-shot-")
     out = os.path.join(tmpdir, "shot.png")
     profile = os.path.join(tmpdir, "profile")
+    proc = None
     try:
-        subprocess.run(
+        # NOTE: on macOS (Chrome 150) headless writes the --screenshot file in a
+        # few seconds but then never exits on its own, so a plain
+        # subprocess.run(timeout=45) blocks the full 45s every call. Instead we
+        # launch it, poll for the PNG to appear, and kill the process as soon as
+        # it does. Linux Chrome exits cleanly and hits the same fast path.
+        proc = subprocess.Popen(
             [chrome, "--headless=new", "--no-sandbox", "--disable-gpu",
              "--disable-extensions", "--hide-scrollbars",
              "--user-data-dir=" + profile,
@@ -135,13 +142,26 @@ def render_screenshot(port, pack_id, width, height, safe=None, capsule=None, bas
              "--virtual-time-budget=4000",
              "--screenshot=" + out, url],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=45, check=False,
         )
-        if not os.path.isfile(out):
-            raise RuntimeError("chrome produced no screenshot")
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                break                      # exited on its own (Linux)
+            if os.path.isfile(out) and os.path.getsize(out) > 0:
+                time.sleep(0.2)            # let the write flush, then stop waiting
+                break
+            time.sleep(0.1)
+        if not os.path.isfile(out) or os.path.getsize(out) == 0:
+            raise RuntimeError("chrome produced no screenshot within 30s")
         with open(out, "rb") as f:
             return f.read()
     finally:
+        if proc and proc.poll() is None:
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
