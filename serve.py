@@ -125,7 +125,7 @@ _ELEM_PASS = ("cx", "cy", "w", "h", "anchor", "rotation", "text", "color",
 # in this matched space), and on save writes back baselineRatio + bg.anchorY.
 # Single-point elements (one literal `cx`); multi-point rows and equal-spaced
 # arrays are handled separately below.
-_BASELINE_CENTER = ("hen", "banner")          # cy = baselineRatio + offsetY
+_BASELINE_CENTER = ("hen", "banner", "chickZone")  # cy = baselineRatio + offsetY
 _BASELINE_TOP = ("avatar", "res_heart_icon", "res_star_icon", "res_egg_icon")  # cy = offsetTop
 _BASELINE_BOTTOM = ("start",)                 # cy = 1 - offsetBottom
 
@@ -469,6 +469,8 @@ def write_source_manifest(source, manifest):
                 target["cx"] = round(float(el["cx"]), 4)
             if "w" in el:
                 target["w"] = round(float(el["w"]), 4)
+            if "h" in el:
+                target["h"] = round(float(el["h"]), 4)
             if isinstance(el.get("cy"), (int, float)):
                 inv = _invert_baseline_element(key, float(el["cy"]), baseline_ratio)
                 if inv is not None:
