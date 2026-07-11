@@ -128,7 +128,7 @@ def render_screenshot(port, pack_id, width, height, safe=None, capsule=None, bas
     profile = os.path.join(tmpdir, "profile")
     try:
         subprocess.run(
-            [chrome, "--headless", "--no-sandbox", "--disable-gpu",
+            [chrome, "--headless=new", "--no-sandbox", "--disable-gpu",
              "--disable-extensions", "--hide-scrollbars",
              "--user-data-dir=" + profile,
              "--window-size=%d,%d" % (width, height),
