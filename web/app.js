@@ -107,8 +107,17 @@ async function init() {
     saved = await fetch('/api/output/' + encodeURIComponent(PACK_ID)).then(r => r.json());
   } catch (e) { saved = {}; }
 
-  elements = (manifest.elements || []).map(el => {
-    const s = saved[el.id] || {};
+  // Element set = pack.json elements  ∪  output._added (duplicates you made in
+  // the editor). Each carries a merged geometry from output, plus an `enabled`
+  // flag (soft-delete): output wins over pack, default true. Disabled elements
+  // stay in the list (greyed, restorable) but don't render on the canvas.
+  // `_added` marks editor-created elements so buildOutput() can round-trip them.
+  const added = Array.isArray(saved._added) ? saved._added : [];
+  const source = (manifest.elements || []).concat(
+    added.map(a => Object.assign({}, a, { _added: true })));
+
+  elements = source.map(el => {
+    const s = (el._added ? el : saved[el.id]) || {};
     return Object.assign({}, el, {
       cx: num(s.cx, el.cx, 0.5),
       cy: num(s.cy, el.cy, 0.5),
@@ -122,6 +131,8 @@ async function init() {
       // top (HUD). Mirrors game-engine anchor systems (Unity RectTransform / Cocos
       // Widget); we currently implement two of the values.
       anchor: str(s.anchor, el.anchor, 'baseline'),
+      // soft-delete: output.enabled overrides pack.enabled, default enabled.
+      enabled: bool(saved[el.id]?.enabled, el.enabled, true),
     });
   });
 
@@ -140,6 +151,15 @@ async function init() {
   renderList();
   window.addEventListener('resize', layoutStage);
   wireToolbar();
+
+  // Delete / Backspace soft-deletes the selection (ignored while typing coords).
+  window.addEventListener('keydown', (e) => {
+    if (e.target.matches('input, textarea')) return;
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
+      e.preventDefault();
+      setEnabled(selectedId, false);
+    }
+  });
 
   if (RENDER_MODE) {
     // Strip editor chrome so only the canvas + artwork remain, then fit the
@@ -377,6 +397,7 @@ function renderElements() {
   canvasEl.querySelectorAll('.el').forEach(n => n.remove());
   nodes.clear();
   for (const el of elements) {
+    if (el.enabled === false) continue;   // soft-deleted: not on canvas
     const node = document.createElement('div');
     node.className = 'el';
     if (el.anchor === 'top') node.classList.add('is-hud');
@@ -554,15 +575,67 @@ function select(id) {
   updateInspector();
 }
 
+// ---------------------------------------------------------------------------
+// delete (soft) / duplicate
+// ---------------------------------------------------------------------------
+function uniqueId(base) {
+  let id = base, n = 2;
+  const taken = new Set(elements.map(e => e.id));
+  while (taken.has(id)) { id = base + '-' + n; n++; }
+  return id;
+}
+
+// Soft-delete: flag enabled=false (kept in list, restorable). Pack elements and
+// duplicates alike — a disabled duplicate simply won't render but still exports.
+function setEnabled(id, on) {
+  const el = elements.find(e => e.id === id);
+  if (!el) return;
+  el.enabled = on;
+  renderElements();
+  renderList();
+  if (!on && selectedId === id) select(null);
+  else updateInspector();
+}
+
+// Duplicate: clone identity + geometry, new id (<id>-copy…), nudged so it's
+// visible, marked _added so it round-trips via output._added.
+function duplicateElement(id) {
+  const src = elements.find(e => e.id === id);
+  if (!src) return;
+  const copy = Object.assign({}, src, {
+    id: uniqueId(src.id + '-copy'),
+    cx: clamp(src.cx + 0.03, 0, 1),
+    cy: clamp(src.cy + 0.03, 0, 1),
+    enabled: true,
+    _added: true,
+  });
+  delete copy._imgAspect;   // let the new node measure its own image
+  const idx = elements.findIndex(e => e.id === id);
+  elements.splice(idx + 1, 0, copy);
+  renderElements();
+  renderList();
+  select(copy.id);
+}
+
 function renderList() {
   listEl.innerHTML = '';
   for (const el of elements) {
     const li = document.createElement('li');
     li.dataset.id = el.id;
     const kind = el.file ? 'image' : (typeof el.text === 'string' ? 'text' : 'box');
-    li.innerHTML = `<span class="el-name"></span><span class="el-kind">${kind}</span>`;
+    const disabled = el.enabled === false;
+    if (disabled) li.classList.add('is-disabled');
+    li.innerHTML = `<span class="el-name"></span>` +
+      (el._added ? '<span class="el-tag">copy</span>' : '') +
+      `<span class="el-kind">${kind}</span>` +
+      `<button class="el-toggle" title="${disabled ? 'Restore' : 'Delete'}">${disabled ? '↺' : '🗑'}</button>`;
     li.querySelector('.el-name').textContent = el.id;
-    li.addEventListener('click', () => select(el.id));
+    li.querySelector('.el-name').addEventListener('click', () => select(el.id));
+    li.querySelector('.el-toggle').addEventListener('click', (e) => {
+      e.stopPropagation();
+      setEnabled(el.id, disabled);   // toggle
+    });
+    li.addEventListener('click', (e) => { if (e.target === li) select(el.id); });
     listEl.appendChild(li);
   }
 }
@@ -592,8 +665,14 @@ function updateInspector() {
         <button data-anchor="center" class="anchor-btn${el.anchor === 'center' ? ' on' : ''}">center</button>
         <button data-anchor="bottom" class="anchor-btn${el.anchor === 'bottom' ? ' on' : ''}">bottom</button>
       </div>
+    </div>
+    <div class="insp-actions">
+      <button id="dup-btn" class="btn btn-ghost" title="Duplicate this element">⧉ Duplicate</button>
+      <button id="del-btn" class="btn btn-ghost btn-danger" title="Delete (soft — restorable from the list)">🗑 Delete</button>
     </div>`;
   inspectorEl.querySelector('.insp-id').textContent = el.id;
+  inspectorEl.querySelector('#dup-btn').addEventListener('click', () => duplicateElement(el.id));
+  inspectorEl.querySelector('#del-btn').addEventListener('click', () => setEnabled(el.id, false));
   inspectorEl.querySelectorAll('.anchor-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       el.anchor = btn.dataset.anchor;
@@ -626,8 +705,15 @@ function updateInspector() {
 // ---------------------------------------------------------------------------
 // export / save
 // ---------------------------------------------------------------------------
+// Fields that define an editor-created (duplicated) element's identity, beyond
+// geometry — carried in output._added so a duplicate survives reload without
+// touching pack.json.
+const IDENTITY_KEYS = ['file', 'text', 'color', 'align', 'fontSize', 'fontFamily',
+  'fontWeight', 'stroke', 'strokeWidth', 'shadow', 'fill', 'alpha', 'radius'];
+
 function buildOutput() {
   const out = {};
+  const added = [];
   const { w: CW, h: CH } = canvasPx();
   for (const el of elements) {
     let h = el.h;
@@ -635,14 +721,24 @@ function buildOutput() {
       const node = nodes.get(el.id);
       h = node ? node.offsetHeight / CH : 0;
     }
-    out[el.id] = {
+    const geo = {
       cx: round(el.cx), cy: round(el.cy), w: round(el.w), h: round(h),
     };
-    if (el.rotation) out[el.id].rotation = Math.round(el.rotation * 10) / 10;
-    if (el.flipH) out[el.id].flipH = true;
-    if (el.flipV) out[el.id].flipV = true;
-    if (el.anchor && el.anchor !== 'baseline') out[el.id].anchor = el.anchor;  // default baseline omitted
+    if (el.rotation) geo.rotation = Math.round(el.rotation * 10) / 10;
+    if (el.flipH) geo.flipH = true;
+    if (el.flipV) geo.flipV = true;
+    if (el.anchor && el.anchor !== 'baseline') geo.anchor = el.anchor;  // default baseline omitted
+    if (el.enabled === false) geo.enabled = false;  // soft-delete flag
+    if (el._added) {
+      // duplicate: store full definition (identity + geometry) in _added
+      const def = { id: el.id };
+      for (const k of IDENTITY_KEYS) if (el[k] !== undefined) def[k] = el[k];
+      added.push(Object.assign(def, geo));
+    } else {
+      out[el.id] = geo;
+    }
   }
+  if (added.length) out._added = added;
   // The horizontal line is a page property (top level), and exports a DIFFERENT
   // field per its kind (§ LINE_KIND):
   //   bgAnchor → anchorLine.cy    (foreground pins to background art)

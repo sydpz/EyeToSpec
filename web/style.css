@@ -385,8 +385,18 @@ code {
 }
 .element-list li:hover { background: var(--bg-elev-2); }
 .element-list li.active { background: var(--accent-soft); color: #cdd7ff; }
-.el-name { font-family: ui-monospace, Menlo, monospace; font-size: 0.82rem; }
+.element-list li.is-disabled { opacity: 0.45; }
+.element-list li.is-disabled .el-name { text-decoration: line-through; }
+.el-name { font-family: ui-monospace, Menlo, monospace; font-size: 0.82rem; flex: 1; }
 .el-kind { font-size: 0.68rem; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.05em; }
+.el-tag { font-size: 0.6rem; color: var(--accent, #7c8cff); border: 1px solid currentColor; border-radius: 4px; padding: 0 0.25rem; text-transform: uppercase; }
+.el-toggle { background: none; border: none; cursor: pointer; font-size: 0.85rem; padding: 0 0.15rem; opacity: 0.6; }
+.el-toggle:hover { opacity: 1; }
+
+.insp-actions { display: flex; gap: 0.5rem; margin-top: 0.9rem; }
+.insp-actions .btn { flex: 1; font-size: 0.8rem; padding: 0.45rem 0.5rem; }
+.btn-danger { color: #ff8a8a; }
+.btn-danger:hover { background: rgba(255, 90, 90, 0.12); }
 
 .inspector-empty { color: var(--text-faint); font-size: 0.85rem; }
 .insp-id { font-family: ui-monospace, Menlo, monospace; margin-bottom: 0.7rem; color: #cdd7ff; }

@@ -103,6 +103,24 @@ Flip matters when art has a direction: a sprite drawn facing right can't be
 | **Text** | `"file": null`, `"text": "Sign in"` | renders the real copy (WYSIWYG) at its font size/color |
 | **Box** | `"file": null`, no text | a labeled placeholder you size freely (for code-drawn elements) |
 
+### Delete and duplicate (without touching pack.json)
+
+Sometimes the layout has one element too many, or one too few. The editor lets
+you fix that on the spot and it survives Save/reload — **`pack.json` stays your
+hand-authored source of truth, untouched**:
+
+- **Delete** (inspector button, or `Delete`/`Backspace`) is a *soft delete*: the
+  element is flagged `enabled: false` in `output/`, disappears from the canvas,
+  but stays in the element list (greyed, struck-through) with a **↺ restore**
+  button. Nothing is lost.
+- **Duplicate** (inspector button) clones the element — identity (file/text/
+  style) and geometry — with a new id (`<id>-copy`), nudged slightly so you can
+  see it. Duplicates are stored in `output._added` with their full definition,
+  so they reload intact.
+
+On load the element set is `pack.json elements ∪ output._added`, with each
+element's `enabled` and geometry overlaid from `output/`.
+
 ## Scope
 
 EyeToSpec does one thing: **turn your visual judgment into a coordinate spec.**
