@@ -178,7 +178,50 @@ def build_source_manifest(source):
         "canvas": canvas,
         "elements": elements,
     }
+    # Review-only safe-area overlay (notch / home indicator), fractions of canvas
+    # height. Declared in the config's _eyetospec block so it travels with the
+    # single source; the editor draws it when no ?safe= query overrides.
+    safe = meta.get("safeArea")
+    if isinstance(safe, dict):
+        manifest["safe"] = {"top": safe.get("top", 0), "bottom": safe.get("bottom", 0)}
+    # Page background the game draws via fillBackgroundWidth (not a layout element):
+    # named in _eyetospec.background so EyeToSpec shows it too. tex → file via profiles.
+    bg = meta.get("background")
+    if isinstance(bg, dict) and bg.get("tex") in profiles:
+        scene, fmt = profiles[bg["tex"]]
+        manifest["background"] = {"file": "%s/%s.%s" % (scene, bg["tex"], fmt),
+                                  "cover": bool(bg.get("cover"))}
+    # WeChat top-right menu-capsule forbidden zone (review guide).
+    if meta.get("showCapsule"):
+        manifest["showCapsule"] = True
     return manifest, resource_root
+
+
+def write_source_manifest(source, manifest):
+    """Write an edited manifest BACK into the source-bound game layout file.
+
+    The inverse of build_source_manifest: for each edited element we update ONLY
+    the placement fields (_ELEM_PASS) on the matching layout key, preserving the
+    game's own schema — tex, _eyetospec, page metadata, and any keys the editor
+    never surfaced. This keeps source.json a true live link (edit in the editor →
+    the hand-authored config updates in place), so NO pack.json snapshot is made
+    and the game + EyeToSpec never drift. Returns the layout path written."""
+    repo = _expand(source.get("repo", "~"))
+    layout_path = os.path.join(repo, source.get("layout", ""))
+    with open(layout_path, "r", encoding="utf-8") as f:
+        layout = json.load(f)
+    edited = {el["id"]: el for el in manifest.get("elements", []) if isinstance(el, dict) and "id" in el}
+    for key, el in edited.items():
+        target = layout.get(key)
+        if not isinstance(target, dict):
+            continue  # editor can't invent new layout keys; skip unknowns
+        for fld in _ELEM_PASS:
+            if fld in el:
+                target[fld] = el[fld]
+    with open(layout_path, "w", encoding="utf-8") as f:
+        json.dump(layout, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    return layout_path
 
 
 def list_packs():
@@ -498,12 +541,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": "invalid json body"}, status=400)
             if not isinstance(manifest, dict) or "elements" not in manifest:
                 return self.send_json({"error": "not a pack manifest"}, status=400)
+            # Source-bound pack: write the edited placements straight back into the
+            # live game layout (source.json is a link, not a snapshot). Never make
+            # a pack.json here — one would shadow the source and re-introduce drift.
+            source = read_source(pack_dir)
+            out = os.path.join(OUTPUT_DIR, pack_id + ".json")
+            if source:
+                try:
+                    layout_path = write_source_manifest(source, manifest)
+                except (OSError, ValueError, json.JSONDecodeError) as e:
+                    return self.send_json({"error": "write-back failed: %s" % e}, status=500)
+                if os.path.isfile(out):
+                    os.remove(out)  # overlay folded into source; drop it
+                return self.send_json({"ok": True, "path": layout_path, "source": True})
+            # Standalone pack: overwrite its pack.json (hand-authored snapshot).
             pack_path = os.path.join(pack_dir, "pack.json")
             with open(pack_path, "w", encoding="utf-8") as f:
                 json.dump(manifest, f, ensure_ascii=False, indent=2)
                 f.write("\n")
             # the overlay is now folded into the pack; drop it so it can't shadow
-            out = os.path.join(OUTPUT_DIR, pack_id + ".json")
             if os.path.isfile(out):
                 os.remove(out)
             return self.send_json({"ok": True, "path": os.path.relpath(pack_path, ROOT)})

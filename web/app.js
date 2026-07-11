@@ -20,12 +20,16 @@ const RENDER_MODE = qs.get('render') === '1';
 // the unsafe top/bottom strips and flag any element whose bounding box crosses a
 // safe line. Fractions are of canvas HEIGHT (top measured from the top edge,
 // bottom from the bottom edge). Absent → no overlay, editor unchanged.
-const SAFE = parseSafe(qs.get('safe'));
+// ?safe= wins; else falls back to the manifest's `safe` block (from the config's
+// _eyetospec.safeArea) once the pack loads. `let` so the manifest can seed it.
+let SAFE = parseSafe(qs.get('safe'));
 // Menu-capsule forbidden zone (?capsule=1): draw the WeChat forward/close capsule
 // bounding rect (top-right, unmovable) so HUD elements can be dragged clear of it.
 // Rect is expressed on the 720-wide design basis, normalized to canvas here.
 // Absent → not drawn, editor unchanged.
-const CAPSULE = qs.get('capsule') === '1';
+// ?capsule=1 forces it on; else the manifest's showCapsule (from _eyetospec) seeds
+// it once the pack loads. `let` so the manifest can turn it on.
+let CAPSULE = qs.get('capsule') === '1';
 // Baseline line semantics (?line=..): the draggable horizontal line means two
 // different things depending on the page, and must export different fields:
 //   bgAnchor (default) — foreground art pins to background art (battle fence↔barn,
@@ -98,6 +102,11 @@ async function init() {
     return;
   }
   if (manifest.error) { toast(manifest.error, true); return; }
+
+  // No explicit ?safe= override → adopt the safe area the config declares.
+  if (!SAFE && manifest.safe) SAFE = parseSafe(`top:${manifest.safe.top},bottom:${manifest.safe.bottom}`);
+  // No explicit ?capsule=1 → adopt the config's showCapsule flag.
+  if (!CAPSULE && manifest.showCapsule) CAPSULE = true;
 
   document.getElementById('pack-name').textContent = manifest.name || PACK_ID;
   const cw = manifest.canvas?.w || 720;
@@ -338,10 +347,13 @@ function checkSafeViolations() {
     const node = nodes.get(el.id);
     if (!node) continue;
     const { h: CH } = canvasPx();
-    // element's normalized vertical extent (top/bottom edge as fraction of height)
+    // element's normalized vertical extent (top/bottom edge as fraction of height).
+    // anchor:"top" elements float to safeArea.top + cy (see placeNode), so they're
+    // inside the safe area BY DESIGN — compare against that same effective cy.
     const halfH = (node.offsetHeight / 2) / (CH || 1);
-    const topEdge = el.cy - halfH;
-    const bottomEdge = el.cy + halfH;
+    const cyEff = (el.anchor === 'top' && SAFE) ? (SAFE.top + el.cy) : el.cy;
+    const topEdge = cyEff - halfH;
+    const bottomEdge = cyEff + halfH;
     const crossesTop = SAFE.top > 0 && topEdge < SAFE.top;
     const crossesBottom = SAFE.bottom > 0 && bottomEdge > (1 - SAFE.bottom);
     node.classList.toggle('safe-violation', crossesTop || crossesBottom);
@@ -549,10 +561,15 @@ function placeNode(el) {
     pxH = el.w * CW * 0.4;       // provisional until image loads
   }
 
+  // anchor:"top" elements (HUD / resource bar) read cy as an OFFSET below the
+  // safe-area top — the game floats them to y = safeArea.top + cy×H so they clear
+  // the notch. Mirror that here (when a safe area is known) so the editor shows
+  // the true on-device position instead of the raw cy. Baseline elements use cy directly.
+  const cyEff = (el.anchor === 'top' && SAFE) ? (SAFE.top + el.cy) : el.cy;
   node.style.width = pxW + 'px';
   node.style.height = pxH + 'px';
   node.style.left = (el.cx * CW - pxW / 2) + 'px';
-  node.style.top = (el.cy * CH - pxH / 2) + 'px';
+  node.style.top = (cyEff * CH - pxH / 2) + 'px';
   const tf = [];
   if (el.rotation) tf.push('rotate(' + el.rotation + 'deg)');
   if (el.flipH || el.flipV) tf.push('scale(' + (el.flipH ? -1 : 1) + ',' + (el.flipV ? -1 : 1) + ')');
