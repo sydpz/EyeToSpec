@@ -75,18 +75,32 @@
         section.appendChild(d);
       }
       const inner = document.createElement('div');
-      inner.className = 'pack-grid';
+      inner.className = 'frame-list';
       group.frames.forEach((f, i) => {
-        const c = card(f);
-        // enter any frame; the editor then walks the rest via next / prev
-        const tag = document.createElement('span');
-        tag.className = 'frame-index';
-        tag.textContent = (i + 1) + ' / ' + group.frames.length;
-        c.querySelector('.pack-card-top').appendChild(tag);
-        inner.appendChild(c);
+        inner.appendChild(frameRow(f, i, group.frames.length));
       });
       section.appendChild(inner);
       return section;
+    }
+
+    // Compact single-line entry for a group member: title only (plus index +
+    // element count), so a group with many frames stays short instead of stacking
+    // full description cards. Clicking enters the frame; the editor walks the rest.
+    function frameRow(pack, i, total) {
+      const a = document.createElement('a');
+      a.className = 'frame-row';
+      const carry = new URLSearchParams(location.search);
+      carry.set('pack', pack.id);
+      a.href = 'editor.html?' + carry.toString();
+      a.innerHTML = `
+        <span class="frame-row-index"></span>
+        <span class="frame-row-name"></span>
+        ${pack.exported ? '<span class="badge">exported</span>' : ''}
+        <span class="frame-row-count"></span>`;
+      a.querySelector('.frame-row-index').textContent = (i + 1) + ' / ' + total;
+      a.querySelector('.frame-row-name').textContent = pack.name;
+      a.querySelector('.frame-row-count').textContent = pack.elementCount + ' elements';
+      return a;
     }
 
     fetch('/api/packs')

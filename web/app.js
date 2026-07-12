@@ -938,6 +938,7 @@ function updateInspector() {
     <div class="insp-text">
       <label class="insp-text-content">text<input id="insp-text" type="text" value="${escAttr(el.text)}"></label>
       <label class="insp-text-size">size px<input id="insp-fontsize" type="number" step="1" min="1" value="${el.fontSize || 16}"></label>
+      <button id="insp-bold" class="bold-btn${Number(el.fontWeight) >= 700 || el.fontWeight === 'bold' ? ' on' : ''}" title="Toggle bold">B</button>
     </div>` : ''}
     <div class="insp-flip">
       <button data-flip="flipH" class="flip-btn${el.flipH ? ' on' : ''}">↔ flip H</button>
@@ -1001,6 +1002,16 @@ function updateInspector() {
     el.fontSize = v;
     const node = nodes.get(el.id);
     if (node) { node.dataset.fontSize = v; placeNode(el); }
+  });
+  // Bold toggle: fontWeight 700 ↔ cleared. Live-update the rendered span, mirror
+  // onto the button state; saved through the fontWeight passthrough (IDENTITY_KEYS).
+  const boldBtn = inspectorEl.querySelector('#insp-bold');
+  if (boldBtn) boldBtn.addEventListener('click', () => {
+    const on = !(Number(el.fontWeight) >= 700 || el.fontWeight === 'bold');
+    if (on) el.fontWeight = 700; else delete el.fontWeight;
+    boldBtn.classList.toggle('on', on);
+    const span = nodes.get(el.id)?.querySelector('span');
+    if (span) span.style.fontWeight = on ? '700' : '';
   });
 }
 
