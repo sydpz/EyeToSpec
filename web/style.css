@@ -544,6 +544,24 @@ code {
   color: var(--text); border-radius: 6px; padding: 0.35rem 0.5rem; width: 100%;
 }
 .insp-text input:focus { outline: none; border-color: var(--accent); }
+.insp-textstyle { display: flex; gap: 0.55rem; margin-top: 0.7rem; align-items: center; }
+.insp-align { display: flex; gap: 0.3rem; flex: 1; }
+.talign-btn {
+  flex: 1; font: inherit; font-size: 0.9rem;
+  background: var(--bg); border: 1px solid var(--border-strong);
+  color: var(--text); border-radius: 6px; padding: 0.35rem 0; cursor: pointer;
+}
+.talign-btn:hover { border-color: var(--accent); }
+.talign-btn.on { background: rgba(80, 200, 255, 0.9); border-color: rgba(80, 200, 255, 0.9); color: #04212e; }
+.insp-color {
+  display: flex; align-items: center; gap: 0.4rem;
+  font-size: 0.72rem; color: var(--text-faint);
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.insp-color input {
+  width: 2.2rem; height: 1.9rem; padding: 0; border: 1px solid var(--border-strong);
+  border-radius: 6px; background: var(--bg); cursor: pointer;
+}
 .insp-flip { display: flex; gap: 0.55rem; margin-top: 0.7rem; }
 .flip-btn {
   flex: 1;

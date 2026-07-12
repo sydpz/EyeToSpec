@@ -320,9 +320,15 @@ function applyCanvasBackground() {
       div.style.backgroundSize = '100% auto';
       div.style.left = '0';
       div.style.width = '100%';
-      div.style.top = '0';
+      // topCy (0..1): the panel scroll-bg tucks its top under the head at the real
+      // screen y, not y=0. Stash it so positionBgLayers (which runs on every
+      // layout and would otherwise reset top to 0) seats the layer there — the bg
+      // peeks just above the guide line, candidates below (scene base+panel model).
+      if (Number.isFinite(bg.topCy)) div.dataset.topCy = String(bg.topCy);
+      div.style.top = (Number.isFinite(bg.topCy) ? bg.topCy * 100 : 0) + '%';
       div.style.bottom = '0';
       canvasEl.appendChild(div);
+      positionBgLayers();
     } else {
       // Other pages (home baseline): the bg is anchorY-centered, art bleeds off
       // top/bottom without side-crop — contain keeps it whole and centered.
@@ -341,8 +347,13 @@ function applyCanvasBackground() {
 function positionBgLayers() {
   const divs = Array.from(canvasEl.querySelectorAll('.bg-layer'));
   const cw = canvasEl.clientWidth || 720;
+  const ch = canvasEl.clientHeight || 1600;
+  // A layer may declare topCy (0..1): its top tucks to that screen fraction
+  // instead of stacking from 0 — the panel scroll-bg seats just under the head.
   let top = 0;
   divs.forEach((div, i) => {
+    const tcy = parseFloat(div.dataset.topCy);
+    if (i === 0 && Number.isFinite(tcy)) top = tcy * ch;
     div.style.left = '0';
     div.style.width = '100%';
     div.style.top = top + 'px';
@@ -1001,6 +1012,14 @@ function updateInspector() {
       <label class="insp-text-content">text<input id="insp-text" type="text" value="${escAttr(el.text)}"></label>
       <label class="insp-text-size">size px<input id="insp-fontsize" type="number" step="1" min="1" value="${el.fontSize || 16}"></label>
       <button id="insp-bold" class="bold-btn${Number(el.fontWeight) >= 700 || el.fontWeight === 'bold' ? ' on' : ''}" title="Toggle bold">B</button>
+    </div>
+    <div class="insp-textstyle">
+      <div class="insp-align">
+        <button data-textalign="left" class="talign-btn${(el.align || 'left') === 'left' ? ' on' : ''}" title="Align left">⬅</button>
+        <button data-textalign="center" class="talign-btn${el.align === 'center' ? ' on' : ''}" title="Align center">⬌</button>
+        <button data-textalign="right" class="talign-btn${el.align === 'right' ? ' on' : ''}" title="Align right">➡</button>
+      </div>
+      <label class="insp-color">color<input id="insp-color" type="color" value="${/^#[0-9a-fA-F]{6}$/.test(el.color || '') ? el.color : '#ffffff'}"></label>
     </div>` : ''}
     <div class="insp-flip">
       <button data-flip="flipH" class="flip-btn${el.flipH ? ' on' : ''}">↔ flip H</button>
@@ -1077,6 +1096,26 @@ function updateInspector() {
       span.style.fontWeight = on ? '700' : '';
       // Keep the faux-bold stroke in sync (only when no explicit outline is set).
       if (!el.stroke) applyFauxBold(span, on ? 700 : undefined, el.color || '#e8eaed');
+    }
+  });
+  // Text align (left/center/right). Saved via IDENTITY_KEYS; live-mirror onto span.
+  inspectorEl.querySelectorAll('.talign-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      el.align = btn.dataset.textalign;
+      inspectorEl.querySelectorAll('.talign-btn').forEach(b =>
+        b.classList.toggle('on', b.dataset.textalign === el.align));
+      const span = nodes.get(el.id)?.querySelector('span');
+      if (span) span.style.textAlign = el.align;
+    });
+  });
+  // Text color. Saved via IDENTITY_KEYS; live-mirror onto span (keep faux-bold in sync).
+  const colorInp = inspectorEl.querySelector('#insp-color');
+  if (colorInp) colorInp.addEventListener('input', () => {
+    el.color = colorInp.value;
+    const span = nodes.get(el.id)?.querySelector('span');
+    if (span) {
+      span.style.color = el.color;
+      if (!el.stroke) applyFauxBold(span, el.fontWeight, el.color);
     }
   });
 }
