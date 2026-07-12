@@ -1019,7 +1019,7 @@ function updateInspector() {
         <button data-textalign="center" class="talign-btn${el.align === 'center' ? ' on' : ''}" title="Align center">⬌</button>
         <button data-textalign="right" class="talign-btn${el.align === 'right' ? ' on' : ''}" title="Align right">➡</button>
       </div>
-      <label class="insp-color">color<input id="insp-color" type="color" value="${/^#[0-9a-fA-F]{6}$/.test(el.color || '') ? el.color : '#ffffff'}"></label>
+      <label class="insp-color">color<span class="insp-color-row"><input id="insp-color" type="color" value="${/^#[0-9a-fA-F]{6}$/.test(el.color || '') ? el.color : '#ffffff'}"><input id="insp-color-hex" type="text" spellcheck="false" value="${escAttr(el.color || '#ffffff')}"></span></label>
     </div>` : ''}
     <div class="insp-flip">
       <button data-flip="flipH" class="flip-btn${el.flipH ? ' on' : ''}">↔ flip H</button>
@@ -1110,13 +1110,27 @@ function updateInspector() {
   });
   // Text color. Saved via IDENTITY_KEYS; live-mirror onto span (keep faux-bold in sync).
   const colorInp = inspectorEl.querySelector('#insp-color');
-  if (colorInp) colorInp.addEventListener('input', () => {
-    el.color = colorInp.value;
+  const colorHex = inspectorEl.querySelector('#insp-color-hex');
+  const applyColor = (hex) => {
+    el.color = hex;
     const span = nodes.get(el.id)?.querySelector('span');
     if (span) {
       span.style.color = el.color;
       if (!el.stroke) applyFauxBold(span, el.fontWeight, el.color);
     }
+  };
+  // Picker → hex text mirror. The hex box is copy/paste-friendly so a color can be
+  // lifted off one element and pasted onto others.
+  if (colorInp) colorInp.addEventListener('input', () => {
+    applyColor(colorInp.value);
+    if (colorHex) colorHex.value = colorInp.value;
+  });
+  if (colorHex) colorHex.addEventListener('input', () => {
+    let v = colorHex.value.trim();
+    if (v && v[0] !== '#') v = '#' + v;
+    if (!/^#[0-9a-fA-F]{6}$/.test(v)) return; // wait for a full valid hex
+    applyColor(v);
+    if (colorInp) colorInp.value = v;
   });
 }
 

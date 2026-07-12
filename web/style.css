@@ -558,10 +558,18 @@ code {
   font-size: 0.72rem; color: var(--text-faint);
   text-transform: uppercase; letter-spacing: 0.05em;
 }
-.insp-color input {
+.insp-color-row { display: flex; align-items: center; gap: 0.4rem; }
+.insp-color input[type="color"] {
   width: 2.2rem; height: 1.9rem; padding: 0; border: 1px solid var(--border-strong);
-  border-radius: 6px; background: var(--bg); cursor: pointer;
+  border-radius: 6px; background: var(--bg); cursor: pointer; flex: none;
 }
+.insp-color input[type="text"] {
+  width: 5.5rem; font: inherit; font-size: 0.8rem; font-family: ui-monospace, monospace;
+  text-transform: none; letter-spacing: 0; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border-strong);
+  border-radius: 6px; padding: 0.3rem 0.45rem;
+}
+.insp-color input[type="text"]:focus { outline: none; border-color: var(--accent); }
 .insp-flip { display: flex; gap: 0.55rem; margin-top: 0.7rem; }
 .flip-btn {
   flex: 1;
