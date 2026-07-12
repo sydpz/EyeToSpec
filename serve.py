@@ -864,8 +864,16 @@ def build_source_manifest(source):
         bg = meta.get("background")
         if isinstance(bg, dict) and bg.get("tex") in profiles:
             scene, fmt = profiles[bg["tex"]]
+            # top-elastic / overlay pages draw the bg via the game's
+            # fillBackgroundWidth: WIDTH-filled + TOP-anchored + overflow-cropped
+            # (NOT contain-centered). Tell app.js to match that model; the overlay
+            # (loadout-panel grass body) tiles downward like the combine grass
+            # layer, so flag it repeat. (baseline pages like home use a different,
+            # anchorY-centered model — see the flat branch below, left unchanged.)
             manifest["background"] = {"file": "%s/%s.%s" % (scene, bg["tex"], fmt),
-                                      "cover": bool(bg.get("cover"))}
+                                      "cover": bool(bg.get("cover")),
+                                      "fit": "width-top",
+                                      "repeat": mode == "overlay"}
         if meta.get("showCapsule"):
             manifest["showCapsule"] = True
         return manifest, resource_root

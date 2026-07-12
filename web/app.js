@@ -293,9 +293,32 @@ function applyCanvasBackground() {
 
   const bg = manifest.background;
   if (bg && bg.file) {
-    canvasEl.style.backgroundImage = `url("${bgUrl(bg.file)}")`;
-    canvasEl.style.backgroundSize = bg.cover ? 'cover' : 'contain';
     canvasEl.classList.remove('checker');
+    if (bg.fit === 'width-top') {
+      // The game draws this bg via fillBackgroundWidth: WIDTH-filled (100%) +
+      // TOP-anchored + overflow-cropped (never contain-centered). Render a single
+      // .bg-layer to match — same model as the combine stacked layers — so the
+      // owner sees elements sitting on the bg where they truly land at runtime.
+      // A repeating bg (overlay grass body) tiles downward to fill the canvas.
+      canvasEl.style.backgroundImage = '';
+      const div = document.createElement('div');
+      div.className = 'bg-layer';
+      div.dataset.repeat = bg.repeat ? '1' : '';
+      div.style.backgroundImage = `url("${bgUrl(bg.file)}")`;
+      div.style.backgroundRepeat = bg.repeat ? 'repeat-y' : 'no-repeat';
+      div.style.backgroundPosition = 'top center';
+      div.style.backgroundSize = '100% auto';
+      div.style.left = '0';
+      div.style.width = '100%';
+      div.style.top = '0';
+      div.style.bottom = '0';
+      canvasEl.appendChild(div);
+    } else {
+      // Other pages (home baseline): the bg is anchorY-centered, art bleeds off
+      // top/bottom without side-crop — contain keeps it whole and centered.
+      canvasEl.style.backgroundImage = `url("${bgUrl(bg.file)}")`;
+      canvasEl.style.backgroundSize = bg.cover ? 'cover' : 'contain';
+    }
   } else {
     canvasEl.classList.add('checker');
   }
