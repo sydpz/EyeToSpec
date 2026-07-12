@@ -1,12 +1,36 @@
 {
   "name": "Search Home",
-  "description": "A demo pack — drag the pieces where they look right, then export the coordinates. Rebuild a classic search landing page: logo, search box, button, label.",
-  "canvas": { "w": 720, "h": 1280 },
-  "background": null,
-  "elements": [
-    { "id": "logo",         "file": "logo.svg",      "cx": 0.32, "cy": 0.16, "w": 0.45 },
-    { "id": "searchbar",    "file": "searchbar.svg", "cx": 0.60, "cy": 0.34, "w": 0.70 },
-    { "id": "btn_search",   "file": "button.svg",    "cx": 0.30, "cy": 0.52, "w": 0.30 },
-    { "id": "label_search", "file": null, "text": "Search", "fontSize": 22, "color": "#3c4043", "align": "center", "cx": 0.68, "cy": 0.58, "w": 0.28, "h": 0.03 }
-  ]
+  "description": "New absolute-coordinate contract demo. A big canvas workspace holds a phoneFrame element (the viewport) plus the search-page pieces, each placed by absolute normalized coords + depth. EyeToSpec paints low depth first; the runtime block is game-only and ignored here.",
+  "canvas": { "width": 2000, "height": 2000 },
+  "elements": {
+    "phoneFrame": {
+      "type": "frame", "depth": 0,
+      "cx": 0.5, "cy": 0.5, "w": 0.36, "h": 0.64,
+      "detail": { "aspect": "720x1280" }
+    },
+    "logo": {
+      "type": "image", "depth": 10,
+      "cx": 0.44, "cy": 0.28, "w": 0.16,
+      "detail": { "tex": "logo.svg" }
+    },
+    "searchbar": {
+      "type": "image", "depth": 10,
+      "cx": 0.53, "cy": 0.38, "w": 0.25,
+      "detail": { "tex": "searchbar.svg" }
+    },
+    "btn_search": {
+      "type": "image", "depth": 20,
+      "cx": 0.43, "cy": 0.47, "w": 0.11,
+      "detail": { "tex": "button.svg" }
+    },
+    "label_search": {
+      "type": "text", "depth": 30,
+      "cx": 0.56, "cy": 0.50, "w": 0.10, "h": 0.02,
+      "detail": { "text": "Search", "fontSize": 8, "color": "#3c4043", "align": "center" }
+    }
+  },
+  "runtime": {
+    "fitMode": "elastic",
+    "anchors": { "logo": "baseline" }
+  }
 }
