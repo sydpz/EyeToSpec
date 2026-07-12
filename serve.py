@@ -105,7 +105,10 @@ def read_group(group_dir):
 # ---------------------------------------------------------------------------
 
 # Top-level layout keys that are page metadata, not placeable elements.
-_LAYOUT_META_KEYS = {"_comment", "_eyetospec", "mode", "elasticZone",
+# `fitMode` (elastic|scroll, spec 2026-07-12) is an ADAPTATION field: it tells the
+# game how the page reflows on a taller/shorter screen. EyeToSpec is a pure static
+# compositor and does NOT act on it — listed here only so it's skipped, never drawn.
+_LAYOUT_META_KEYS = {"_comment", "_eyetospec", "mode", "fitMode", "elasticZone",
                      "baselineRatio", "bg"}
 # Element fields passed through verbatim into the manifest.
 _ELEM_PASS = ("cx", "cy", "w", "h", "anchor", "rotation", "text", "color",
@@ -554,16 +557,22 @@ def _project_overlay(layout, canvas, profiles):
         # never reads it (portraits are per-tower at runtime). tex wins if present.
         _resolve_file(el, pv.get("tex") or pv.get("calibTex"), profiles)
         out.append(el)
-    # mystery parts anchored to grid r1c0 center (a different cell → no overlap
-    # with the reference card). dx is still relative to col 0.
+    # mystery parts anchored to grid r0c1 — the SAME row as the reference card
+    # (r0c0) but the next column over — so the owner can compare the owned-tower
+    # card and the locked (mystery) card side by side at one baseline and drag the
+    # heights into agreement. A different CELL → no overlap with the reference
+    # card. Game meaning is preserved: dx/dy are an offset from a cell center, and
+    # inversion (below) folds back against this SAME col-1/row-0 reference.
     mys = layout.get("mystery") if isinstance(layout.get("mystery"), dict) else {}
-    ref1_cy = center_cy(1 if _OVERLAY_GRID_ROWS > 1 else 0)
+    mys_col = 1 if ncols > 1 else 0
+    mys_cx = _num(col_cx[mys_col], 0.5)
+    ref1_cy = center_cy(0)
     for part in _OVERLAY_MYSTERY_PARTS:
         pv = mys.get(part)
         if not isinstance(pv, dict):
             continue
         el = {"id": "mystery" + _ROW_SEP + part,
-              "cx": ref0_cx + _num(pv.get("dx"), 0.0),
+              "cx": mys_cx + _num(pv.get("dx"), 0.0),
               "cy": ref1_cy + _num(pv.get("dy"), 0.0) * k}
         if isinstance(pv.get("w"), (int, float)):
             el["w"] = pv["w"]
@@ -611,7 +620,11 @@ def _invert_overlay(layout, canvas, edited):
     row_pitch = _num(grid.get("rowPitch"), 0.0) if isinstance(grid, dict) else 0.0
     ref0_cx = _num(col_cx[0], 0.5) if isinstance(col_cx, list) and col_cx else 0.5
     ref0_cy = first_cy * k
-    ref1_cy = (first_cy + row_pitch) * k
+    # mystery is projected at r0c1 (same row as the card, next column). Fold its
+    # edits back against that SAME reference: col-1 x, row-0 y.
+    mys_col = 1 if ncols > 1 else 0
+    mys_cx = _num(col_cx[mys_col], 0.5) if isinstance(col_cx, list) and col_cx else 0.5
+    ref1_cy = first_cy * k
 
     card = layout.get("card")
     if isinstance(card, dict):
@@ -634,7 +647,7 @@ def _invert_overlay(layout, canvas, edited):
             if el is None or not isinstance(tgt, dict):
                 continue
             if "cx" in el:
-                tgt["dx"] = round(float(el["cx"]) - ref0_cx, 6)
+                tgt["dx"] = round(float(el["cx"]) - mys_cx, 6)
             if isinstance(el.get("cy"), (int, float)):
                 tgt["dy"] = round((float(el["cy"]) - ref1_cy) * inv_k, 6)
             if "w" in el:
