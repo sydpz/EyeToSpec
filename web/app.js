@@ -65,7 +65,13 @@ const CAPSULE_RECT_720 = { x0: 545, x1: 700, y0: 90, y1: 155, basisW: 720, basis
 const stageEl = document.getElementById('stage');
 const canvasEl = document.getElementById('canvas');
 const listEl = document.getElementById('element-list');
+const labelFilterEl = document.getElementById('label-filter');
 const inspectorEl = document.getElementById('inspector');
+if (labelFilterEl) labelFilterEl.addEventListener('change', () => {
+  labelFilter = labelFilterEl.value;
+  renderElements();
+  renderList();
+});
 const toastEl = document.getElementById('toast');
 
 let manifest = null;      // the pack.json
@@ -74,6 +80,9 @@ let nodes = new Map();    // id -> DOM node
 let selectedIds = new Set();  // multi-select; single-select is a set of one
 // The "primary" selection (last clicked) drives the single-element inspector.
 let primaryId = null;
+// Layer filter: when non-empty, only elements whose `label` equals it are shown
+// (canvas + list). '' = show all. Driven by the #label-filter dropdown.
+let labelFilter = '';
 let canvasAspect = 1;     // w / h of the pack canvas
 let zoom = 1;             // 1 = fit-to-viewport; >1 = magnified (stage-wrap scrolls)
 const ZOOM_MIN = 1, ZOOM_MAX = 6, ZOOM_STEP = 1.25;
@@ -136,9 +145,9 @@ async function init() {
   elements = source.map(el => {
     const s = (el._added ? el : saved[el.id]) || {};
     return Object.assign({}, el, {
-      cx: num(s.cx, el.cx, 0.5),
-      cy: num(s.cy, el.cy, 0.5),
-      w: num(s.w, el.w, 0.2),
+      x: num(s.x, el.x, 0),      // top-left corner, canvas px
+      y: num(s.y, el.y, 0),
+      w: num(s.w, el.w, 100),
       h: num(s.h, el.h, null),   // may be null for aspect-locked images until measured
       rotation: num(s.rotation, el.rotation, 0),  // degrees, clockwise
       flipH: bool(s.flipH, el.flipH, false),  // mirror left-right
@@ -148,6 +157,10 @@ async function init() {
       // top (HUD). Mirrors game-engine anchor systems (Unity RectTransform / Cocos
       // Widget); we currently implement two of the values.
       anchor: str(s.anchor, el.anchor, 'baseline'),
+      depth: num(s.depth, el.depth, 0),   // paint order (low = underneath)
+      // label: layer tag (single string, e.g. "overlay"/"scroll"). Pure grouping
+      // annotation — the runtime maps it to a layer role; EyeToSpec stores + filters.
+      label: str(s.label, el.label, ''),
       // soft-delete: output.enabled overrides pack.enabled, default enabled.
       enabled: bool(saved[el.id]?.enabled, el.enabled, true),
     });
@@ -165,6 +178,7 @@ async function init() {
   guideCy = Number.isFinite(manifest.guideLine) ? manifest.guideLine : null;
 
   applyCanvasBackground();
+  drawEnv();          // device-chrome (phone frame + safe areas + wx capsule)
   drawSafeBands();
   drawCapsule();
   drawAnchorLine();
@@ -172,6 +186,7 @@ async function init() {
   layoutStage();
   renderElements();
   setupFrameNav();
+  refreshLabelFilter();
   renderList();
   window.addEventListener('resize', layoutStage);
   wireToolbar();
@@ -405,6 +420,7 @@ function layoutStage() {
   w *= zoom; h *= zoom;
   canvasEl.style.width = w + 'px';
   canvasEl.style.height = h + 'px';
+  sizeEnv();
   sizeSafeBands();
   sizeCapsule();
   sizeAnchorLine();
@@ -434,6 +450,120 @@ function setZoom(next) {
 
 function canvasPx() {
   return { w: canvasEl.clientWidth, h: canvasEl.clientHeight };
+}
+
+// Display scale: the canvas is a fixed board of `canvas.width × canvas.height`
+// PIXELS. On screen it's shrunk to fit the viewport (aspect preserved), so one
+// factor maps canvas-px → screen-px. All stored coords are canvas px; only
+// rendering multiplies by this. S = displayedWidth / canvas.width.
+function dispScale() {
+  const cw = (manifest && manifest.canvas && manifest.canvas.w) || canvasEl.clientWidth || 1;
+  return (canvasEl.clientWidth || cw) / cw;
+}
+
+// ---------------------------------------------------------------------------
+// env: device-chrome components (declarative — configured → drawn, absent → not)
+//   env.frame       phone viewport rect, free-positioned on the canvas by
+//                   cx/cy/w + aspectW/aspectH (w drives, aspect locks h). NOT an
+//                   `elements` entry → never selectable, never a game element.
+//   env.safeTop     translucent band at the TOP of the frame rect, h = fraction of
+//   env.safeBottom  the frame HEIGHT (not canvas). Marks the unsafe notch/home bar.
+//   env.wxCapsule   WeChat menu-capsule forbidden zone, cx/cy/w + aspectW/aspectH
+//                   given RELATIVE TO THE FRAME RECT (0..1 within the frame).
+// The whole group hangs off env.frame: no frame → nothing drawn (safe areas and
+// capsule are meaningless without a screen to hang them on).
+// ---------------------------------------------------------------------------
+let envFrameEl = null;   // the phone-frame border div
+let envSafeTopEl = null;
+let envSafeBotEl = null;
+let envCapsuleEl = null;
+
+// The frame's on-screen rect. env.frame is canvas px, top-left origin
+// (x/y/w/h); multiply by display scale to get screen px.
+function envFrameRect() {
+  const env = manifest && manifest.env;
+  if (!env || !env.frame) return null;
+  const f = env.frame;
+  const S = dispScale();
+  return {
+    left: num(f.x, null, 0) * S,
+    top:  num(f.y, null, 0) * S,
+    w:    num(f.w, null, 720) * S,
+    h:    num(f.h, null, 1280) * S,
+    S,
+  };
+}
+
+// Create the env nodes once (idempotent per load). Only for what's configured.
+function drawEnv() {
+  const env = manifest && manifest.env;
+  if (!env || !env.frame) return;
+  const mk = (cls, labelText) => {
+    const d = document.createElement('div');
+    d.className = cls;
+    if (labelText != null) {
+      const lbl = document.createElement('div');
+      lbl.className = cls + '-label';
+      lbl.textContent = labelText;
+      d.appendChild(lbl);
+    }
+    canvasEl.appendChild(d);
+    return d;
+  };
+  envFrameEl = mk('env-frame', null);
+  // Safe-area labels carry an optional `name` and always show the px height so you
+  // can tell which band is which at a glance. name ? "name 112px" : "safe top 112px".
+  const safeLabel = (spec, fallback) => {
+    const px = Math.round(num(spec.h, null, 0)) + 'px';
+    return spec.name ? `${spec.name} ${px}` : `${fallback} ${px}`;
+  };
+  if (env.safeTop && num(env.safeTop.h, null, 0) > 0)
+    envSafeTopEl = mk('env-safe env-safe-top', safeLabel(env.safeTop, 'safe top'));
+  if (env.safeBottom && num(env.safeBottom.h, null, 0) > 0)
+    envSafeBotEl = mk('env-safe env-safe-bottom', safeLabel(env.safeBottom, 'safe bottom'));
+  if (env.wxCapsule) envCapsuleEl = mk('env-capsule', env.wxCapsule.name || '不可点击区');
+  sizeEnv();
+}
+
+// Position/size all env nodes against the live frame rect (called from layoutStage).
+function sizeEnv() {
+  const rect = envFrameRect();
+  if (!rect || !envFrameEl) return;
+  const env = manifest.env;
+  const px = (v) => v + 'px';
+  Object.assign(envFrameEl.style, {
+    left: px(rect.left), top: px(rect.top), width: px(rect.w), height: px(rect.h),
+  });
+  const S = rect.S;   // canvas px → screen px
+  if (envSafeTopEl) {
+    const h = num(env.safeTop.h, null, 0) * S;   // safeTop.h is canvas px (of frame)
+    Object.assign(envSafeTopEl.style, {
+      left: px(rect.left), top: px(rect.top), width: px(rect.w), height: px(h),
+    });
+  }
+  if (envSafeBotEl) {
+    const h = num(env.safeBottom.h, null, 0) * S;
+    Object.assign(envSafeBotEl.style, {
+      left: px(rect.left), top: px(rect.top + rect.h - h), width: px(rect.w), height: px(h),
+    });
+  }
+  if (envCapsuleEl) {
+    // The WeChat capsule is a PHYSICAL fixed-size rect (≈155×65px at 90px from the
+    // top on a 720-wide screen). It does NOT scale with screen HEIGHT — WeChat lays
+    // it out by width. So we scale its design px (at basisW) by the frame's WIDTH
+    // factor: (frameWidthCanvasPx / basisW), then by display scale. No height-frac
+    // → no 1280-vs-1600 drift.
+    const c = env.wxCapsule;
+    const basisW = num(c.basisW, null, 720);
+    const frameWcanvas = num(env.frame.w, null, 720);
+    const s = (frameWcanvas / basisW) * S;   // width-only scale, into screen px
+    Object.assign(envCapsuleEl.style, {
+      left: px(rect.left + num(c.x, null, 545) * s),
+      top: px(rect.top + num(c.y, null, 90) * s),
+      width: px(num(c.w, null, 155) * s),
+      height: px(num(c.h, null, 65) * s),
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -472,19 +602,15 @@ function sizeSafeBands() {
 // and logs a warning (visible in the headless screenshot console too). Compares
 // in NORMALIZED cy±h/2 space so it's resolution-independent.
 function checkSafeViolations() {
-  if (!SAFE) return;
+  if (!SAFE) return;   // legacy query-driven path; new packs use env instead
+  const CH = (manifest.canvas && manifest.canvas.h) || 1280;
   const violators = [];
   for (const el of elements) {
     const node = nodes.get(el.id);
     if (!node) continue;
-    const { h: CH } = canvasPx();
-    // element's normalized vertical extent (top/bottom edge as fraction of height).
-    // anchor:"top" elements float to safeArea.top + cy (see placeNode), so they're
-    // inside the safe area BY DESIGN — compare against that same effective cy.
-    const halfH = (node.offsetHeight / 2) / (CH || 1);
-    const cyEff = (el.anchor === 'top' && SAFE) ? (SAFE.top + el.cy) : el.cy;
-    const topEdge = cyEff - halfH;
-    const bottomEdge = cyEff + halfH;
+    // element vertical extent as fraction of canvas height (x/y = top-left, px)
+    const topEdge = el.y / CH;
+    const bottomEdge = (el.y + heightOf(el)) / CH;
     const crossesTop = SAFE.top > 0 && topEdge < SAFE.top;
     const crossesBottom = SAFE.bottom > 0 && bottomEdge > (1 - SAFE.bottom);
     node.classList.toggle('safe-violation', crossesTop || crossesBottom);
@@ -538,12 +664,12 @@ function sizeCapsule() {
 
 // Does an element's bounding box overlap the capsule rect? (normalized space)
 function overlapsCapsule(el, node) {
-  if (!CAPSULE) return false;
-  const { w: CW, h: CH } = canvasPx();
-  const halfW = (node.offsetWidth / 2) / (CW || 1);
-  const halfH = (node.offsetHeight / 2) / (CH || 1);
+  if (!CAPSULE) return false;   // legacy query-driven path; new packs use env instead
+  const CW = (manifest.canvas && manifest.canvas.w) || 720;
+  const CH = (manifest.canvas && manifest.canvas.h) || 1280;
   const f = capsuleFrac();
-  const l = el.cx - halfW, r = el.cx + halfW, t = el.cy - halfH, b = el.cy + halfH;
+  const l = el.x / CW, r = (el.x + el.w) / CW;
+  const t = el.y / CH, b = (el.y + heightOf(el)) / CH;
   return !(r < f.left || l > f.right || b < f.top || t > f.bottom);
 }
 
@@ -632,6 +758,7 @@ function renderElements() {
   nodes.clear();
   for (const el of elements) {
     if (el.enabled === false) continue;   // soft-deleted: not on canvas
+    if (labelFilter && el.label !== labelFilter) continue;  // layer filter
     const node = document.createElement('div');
     node.className = 'el';
     if (el.anchor === 'top') node.classList.add('is-hud');
@@ -707,35 +834,31 @@ function renderElements() {
 function placeNode(el) {
   const node = nodes.get(el.id);
   if (!node) return;
-  const { w: CW, h: CH } = canvasPx();
-  if (!CW || !CH) return;
+  const S = dispScale();
 
-  const pxW = el.w * CW;
+  // All coords are canvas px, top-left origin. Screen px = canvas px × display scale.
+  const pxW = el.w * S;
   let pxH;
   if (el.h != null) {
-    pxH = el.h * CH;
+    pxH = el.h * S;
   } else if (el._imgAspect) {
-    pxH = pxW / el._imgAspect;   // aspect-locked image
+    pxH = (el.w / el._imgAspect) * S;   // aspect-locked image (canvas-px h × S)
   } else {
-    pxH = el.w * CW * 0.4;       // provisional until image loads
+    pxH = el.w * 0.4 * S;               // provisional until image loads
   }
 
-  // anchor:"top" elements (HUD / resource bar) read cy as an OFFSET below the
-  // safe-area top — the game floats them to y = safeArea.top + cy×H so they clear
-  // the notch. Mirror that here (when a safe area is known) so the editor shows
-  // the true on-device position instead of the raw cy. Baseline elements use cy directly.
-  const cyEff = (el.anchor === 'top' && SAFE) ? (SAFE.top + el.cy) : el.cy;
   node.style.width = pxW + 'px';
   node.style.height = pxH + 'px';
-  node.style.left = (el.cx * CW - pxW / 2) + 'px';
-  node.style.top = (cyEff * CH - pxH / 2) + 'px';
+  node.style.left = (el.x * S) + 'px';      // x/y = top-left corner, canvas px
+  node.style.top = (el.y * S) + 'px';
+  node.style.zIndex = Number.isFinite(el.depth) ? el.depth : 0;  // paint order
   const tf = [];
   if (el.rotation) tf.push('rotate(' + el.rotation + 'deg)');
   if (el.flipH || el.flipV) tf.push('scale(' + (el.flipH ? -1 : 1) + ',' + (el.flipV ? -1 : 1) + ')');
   node.style.transform = tf.join(' ');
 
   if (node.classList.contains('el-text')) {
-    const fs = (parseFloat(node.dataset.fontSize) || 16) * (CW / (manifest.canvas.w || CW));
+    const fs = (parseFloat(node.dataset.fontSize) || 16) * S;
     node.querySelector('span').style.fontSize = fs + 'px';
   }
 }
@@ -754,17 +877,17 @@ function onPointerDown(e, el, node, mode) {
   if (additive) { select(el.id, true); return; }
   if (!selectedIds.has(el.id)) select(el.id);
   node.setPointerCapture(e.pointerId);
-  const { w: CW, h: CH } = canvasPx();
+  const S = dispScale();
   const rect = node.getBoundingClientRect();
   drag = {
     el, node, mode, pointerId: e.pointerId,
     startX: e.clientX, startY: e.clientY,
-    startCx: el.cx, startCy: el.cy, startW: el.w,
-    startH: el.h != null ? el.h : (node.offsetHeight / CH),
+    startElX: el.x, startElY: el.y, startW: el.w,
+    startH: el.h != null ? el.h : (node.offsetHeight / S),
     startRot: el.rotation || 0,
     centerX: rect.left + rect.width / 2,
     centerY: rect.top + rect.height / 2,
-    CW, CH,
+    S,
   };
   if (mode === 'rotate') {
     drag.startAngle = Math.atan2(e.clientY - drag.centerY, e.clientX - drag.centerX) * 180 / Math.PI;
@@ -776,16 +899,19 @@ function onPointerDown(e, el, node, mode) {
 
 function onPointerMove(e) {
   if (!drag) return;
-  const dx = (e.clientX - drag.startX) / drag.CW;
-  const dy = (e.clientY - drag.startY) / drag.CH;
+  // pointer delta in canvas px (screen px ÷ display scale)
+  const dx = (e.clientX - drag.startX) / drag.S;
+  const dy = (e.clientY - drag.startY) / drag.S;
   const el = drag.el;
+  const CW = (manifest.canvas && manifest.canvas.w) || 720;
 
   if (drag.mode === 'resize') {
-    el.w = clamp(drag.startW + dx * 2, 0.02, 4);
+    // top-left pinned, grow down-right: width follows the drag directly (not ×2)
+    el.w = clamp(drag.startW + dx, 4, CW * 4);
     if (el.file && el._imgAspect) {
       el.h = null; // keep aspect-locked
     } else {
-      el.h = clamp(drag.startH + dy * 2, 0.01, 4);
+      el.h = clamp(drag.startH + dy, 2, CW * 4);
     }
   } else if (drag.mode === 'rotate') {
     const ang = Math.atan2(e.clientY - drag.centerY, e.clientX - drag.centerX) * 180 / Math.PI;
@@ -797,8 +923,8 @@ function onPointerMove(e) {
     }
     el.rotation = Math.round(next * 10) / 10;
   } else {
-    el.cx = clamp(drag.startCx + dx, -0.5, 1.5);
-    el.cy = clamp(drag.startCy + dy, -0.5, 1.5);
+    el.x = drag.startElX + dx;   // top-left corner, canvas px (free to go off-board)
+    el.y = drag.startElY + dy;
   }
   placeNode(el);
   updateInspector();
@@ -850,13 +976,12 @@ function refreshSelectionUI() {
 // ---------------------------------------------------------------------------
 // multi-element align / distribute / center-on-canvas
 // ---------------------------------------------------------------------------
-// Normalized half-height of an element. Explicit h wins; otherwise measure the
-// live node (aspect-locked images) and convert to canvas fraction.
-function halfHeightOf(el) {
-  if (el.h != null) return el.h / 2;
+// Element height in canvas px. Explicit h wins; otherwise measure the live node
+// (aspect-locked images) and convert screen px → canvas px via display scale.
+function heightOf(el) {
+  if (el.h != null) return el.h;
   const node = nodes.get(el.id);
-  const { h: CH } = canvasPx();
-  return node ? (node.offsetHeight / CH) / 2 : el.w / 2;
+  return node ? (node.offsetHeight / dispScale()) : el.w;
 }
 
 function selectedElements() {
@@ -872,23 +997,22 @@ function applyToSelection(fn) {
   updateInspector();
 }
 
-// Align edges/centers to the selection's bounding box (Figma-style).
+// Align edges/centers to the selection's bounding box (Figma-style). All canvas
+// px, top-left origin: x/y are corners, size is w/h.
 function alignSelection(edge) {
   applyToSelection((sel) => {
-    const boxes = sel.map(el => ({
-      el, hw: el.w / 2, hh: halfHeightOf(el),
-    }));
-    const left   = Math.min(...boxes.map(b => b.el.cx - b.hw));
-    const right  = Math.max(...boxes.map(b => b.el.cx + b.hw));
-    const top    = Math.min(...boxes.map(b => b.el.cy - b.hh));
-    const bottom = Math.max(...boxes.map(b => b.el.cy + b.hh));
+    const boxes = sel.map(el => ({ el, w: el.w, h: heightOf(el) }));
+    const left   = Math.min(...boxes.map(b => b.el.x));
+    const right  = Math.max(...boxes.map(b => b.el.x + b.w));
+    const top    = Math.min(...boxes.map(b => b.el.y));
+    const bottom = Math.max(...boxes.map(b => b.el.y + b.h));
     for (const b of boxes) {
-      if (edge === 'left')   b.el.cx = left + b.hw;
-      if (edge === 'right')  b.el.cx = right - b.hw;
-      if (edge === 'hcenter') b.el.cx = (left + right) / 2;
-      if (edge === 'top')    b.el.cy = top + b.hh;
-      if (edge === 'bottom') b.el.cy = bottom - b.hh;
-      if (edge === 'vcenter') b.el.cy = (top + bottom) / 2;
+      if (edge === 'left')    b.el.x = left;
+      if (edge === 'right')   b.el.x = right - b.w;
+      if (edge === 'hcenter') b.el.x = (left + right) / 2 - b.w / 2;
+      if (edge === 'top')     b.el.y = top;
+      if (edge === 'bottom')  b.el.y = bottom - b.h;
+      if (edge === 'vcenter') b.el.y = (top + bottom) / 2 - b.h / 2;
     }
   });
 }
@@ -898,11 +1022,13 @@ function alignSelection(edge) {
 function distributeSelection(axis) {
   applyToSelection((sel) => {
     if (sel.length < 3) return;   // 2 elements are already "evenly spaced"
-    const key = axis === 'h' ? 'cx' : 'cy';
-    const sorted = [...sel].sort((a, b) => a[key] - b[key]);
-    const lo = sorted[0][key], hi = sorted[sorted.length - 1][key];
+    const posKey = axis === 'h' ? 'x' : 'y';
+    const sizeOf = axis === 'h' ? (el => el.w) : heightOf;
+    const center = el => el[posKey] + sizeOf(el) / 2;
+    const sorted = [...sel].sort((a, b) => center(a) - center(b));
+    const lo = center(sorted[0]), hi = center(sorted[sorted.length - 1]);
     const step = (hi - lo) / (sorted.length - 1);
-    sorted.forEach((el, i) => { el[key] = lo + step * i; });
+    sorted.forEach((el, i) => { el[posKey] = (lo + step * i) - sizeOf(el) / 2; });
   });
 }
 
@@ -910,12 +1036,15 @@ function distributeSelection(axis) {
 // layout) on one axis.
 function centerOnCanvas(axis) {
   applyToSelection((sel) => {
-    const key = axis === 'h' ? 'cx' : 'cy';
-    const hwOf = axis === 'h' ? (el => el.w / 2) : halfHeightOf;
-    const lo = Math.min(...sel.map(el => el[key] - hwOf(el)));
-    const hi = Math.max(...sel.map(el => el[key] + hwOf(el)));
-    const delta = 0.5 - (lo + hi) / 2;
-    for (const el of sel) el[key] += delta;
+    const posKey = axis === 'h' ? 'x' : 'y';
+    const sizeOf = axis === 'h' ? (el => el.w) : heightOf;
+    const canvasSize = axis === 'h'
+      ? ((manifest.canvas && manifest.canvas.w) || 720)
+      : ((manifest.canvas && manifest.canvas.h) || 1280);
+    const lo = Math.min(...sel.map(el => el[posKey]));
+    const hi = Math.max(...sel.map(el => el[posKey] + sizeOf(el)));
+    const delta = canvasSize / 2 - (lo + hi) / 2;
+    for (const el of sel) el[posKey] += delta;
   });
 }
 
@@ -974,8 +1103,8 @@ function duplicateElement(id) {
   if (!src) return;
   const copy = Object.assign({}, src, {
     id: uniqueId(src.id + '-copy'),
-    cx: clamp(src.cx + 0.03, 0, 1),
-    cy: clamp(src.cy + 0.03, 0, 1),
+    x: (src.x || 0) + 20,   // nudge 20px down-right so the copy is visible
+    y: (src.y || 0) + 20,
     enabled: true,
     _added: true,
   });
@@ -987,9 +1116,22 @@ function duplicateElement(id) {
   select(copy.id);
 }
 
+// Rebuild the #label-filter dropdown from the labels currently in use. Keeps the
+// active selection if it still exists, else falls back to "All".
+function refreshLabelFilter() {
+  if (!labelFilterEl) return;
+  const labels = Array.from(new Set(
+    elements.map(e => (e.label || '').trim()).filter(Boolean))).sort();
+  if (labelFilter && !labels.includes(labelFilter)) labelFilter = '';
+  labelFilterEl.innerHTML = '<option value="">All layers</option>' +
+    labels.map(l => `<option value="${l}">${l}</option>`).join('');
+  labelFilterEl.value = labelFilter;
+}
+
 function renderList() {
   listEl.innerHTML = '';
   for (const el of elements) {
+    if (labelFilter && el.label !== labelFilter) continue;  // layer filter
     const li = document.createElement('li');
     li.dataset.id = el.id;
     const kind = el.file ? 'image' : (typeof el.text === 'string' ? 'text' : 'box');
@@ -997,6 +1139,7 @@ function renderList() {
     if (disabled) li.classList.add('is-disabled');
     li.innerHTML = `<span class="el-name"></span>` +
       (el._added ? '<span class="el-tag">copy</span>' : '') +
+      (el.label ? `<span class="el-tag el-label-tag">${el.label}</span>` : '') +
       `<span class="el-kind">${kind}</span>` +
       `<button class="el-toggle" title="${disabled ? 'Restore' : 'Delete'}">${disabled ? '↺' : '🗑'}</button>`;
     li.querySelector('.el-name').textContent = el.id;
@@ -1014,15 +1157,16 @@ function renderList() {
 function updateInspector() {
   const el = elements.find(e => e.id === primaryId);
   if (!el) { inspectorEl.innerHTML = '<div class="inspector-empty">Click an element to inspect it.</div>'; return; }
-  const h = el.h != null ? el.h : (el._imgAspect ? el.w / el._imgAspect * (manifest.canvas.w / manifest.canvas.h) : 0);
+  const h = el.h != null ? el.h : (el._imgAspect ? el.w / el._imgAspect : heightOf(el));
   inspectorEl.innerHTML = `
     <div class="insp-id"></div>
     <div class="insp-grid">
-      <label>cx<input data-k="cx" type="number" step="0.001" value="${el.cx.toFixed(3)}"></label>
-      <label>cy<input data-k="cy" type="number" step="0.001" value="${el.cy.toFixed(3)}"></label>
-      <label>w<input data-k="w" type="number" step="0.001" value="${el.w.toFixed(3)}"></label>
-      <label>h<input data-k="h" type="number" step="0.001" value="${h.toFixed(3)}"></label>
+      <label>x<input data-k="x" type="number" step="1" value="${Math.round(el.x)}"></label>
+      <label>y<input data-k="y" type="number" step="1" value="${Math.round(el.y)}"></label>
+      <label>w<input data-k="w" type="number" step="1" value="${Math.round(el.w)}"></label>
+      <label>h<input data-k="h" type="number" step="1" value="${Math.round(h)}"></label>
       <label>rotation°<input data-k="rotation" type="number" step="1" value="${(el.rotation || 0).toFixed(1)}"></label>
+      <label>depth<input data-k="depth" type="number" step="1" value="${Number.isFinite(el.depth) ? el.depth : 0}"></label>
     </div>
     ${typeof el.text === 'string' ? `
     <div class="insp-text">
@@ -1051,11 +1195,23 @@ function updateInspector() {
         <button data-anchor="bottom" class="anchor-btn${el.anchor === 'bottom' ? ' on' : ''}">bottom</button>
       </div>
     </div>
+    <div class="insp-label">
+      <label>layer label
+        <input id="insp-label" type="text" spellcheck="false" placeholder="e.g. overlay / scroll" value="${escAttr(el.label || '')}">
+      </label>
+    </div>
     <div class="insp-actions">
       <button id="dup-btn" class="btn btn-ghost" title="Duplicate this element">⧉ Duplicate</button>
       <button id="del-btn" class="btn btn-ghost btn-danger" title="Delete (soft — restorable from the list)">🗑 Delete</button>
     </div>`;
   inspectorEl.querySelector('.insp-id').textContent = el.id;
+  const labelInp = inspectorEl.querySelector('#insp-label');
+  if (labelInp) labelInp.addEventListener('change', () => {
+    el.label = labelInp.value.trim();
+    refreshLabelFilter();
+    renderList();
+    renderElements();   // label may drop el out of / into the active filter
+  });
   inspectorEl.querySelector('#dup-btn').addEventListener('click', () => duplicateElement(el.id));
   inspectorEl.querySelector('#del-btn').addEventListener('click', () => setEnabled(el.id, false));
   inspectorEl.querySelectorAll('.anchor-btn').forEach(btn => {
@@ -1179,25 +1335,23 @@ function escAttr(s) {
 // geometry — carried in output._added so a duplicate survives reload without
 // touching pack.json.
 const IDENTITY_KEYS = ['file', 'text', 'color', 'align', 'fontSize', 'fontFamily',
-  'fontWeight', 'stroke', 'strokeWidth', 'shadow', 'fill', 'alpha', 'radius'];
+  'fontWeight', 'stroke', 'strokeWidth', 'shadow', 'fill', 'alpha', 'radius', 'label'];
 
 function buildOutput() {
   const out = {};
   const added = [];
-  const { w: CW, h: CH } = canvasPx();
   for (const el of elements) {
     let h = el.h;
-    if (h == null) {
-      const node = nodes.get(el.id);
-      h = node ? node.offsetHeight / CH : 0;
-    }
+    if (h == null) h = heightOf(el);   // measured, in canvas px
     const geo = {
-      cx: round(el.cx), cy: round(el.cy), w: round(el.w), h: round(h),
+      x: round(el.x), y: round(el.y), w: round(el.w), h: round(h),
     };
     if (el.rotation) geo.rotation = Math.round(el.rotation * 10) / 10;
     if (el.flipH) geo.flipH = true;
     if (el.flipV) geo.flipV = true;
+    if (Number.isFinite(el.depth)) geo.depth = el.depth;   // paint order
     if (el.anchor && el.anchor !== 'baseline') geo.anchor = el.anchor;  // default baseline omitted
+    if (el.label) geo.label = el.label;   // layer tag, omitted when untagged
     if (el.enabled === false) geo.enabled = false;  // soft-delete flag
     if (el._added) {
       // duplicate: store full definition (identity + geometry) in _added
@@ -1215,44 +1369,43 @@ function buildOutput() {
   //   divider  → elasticZone.{topCy, minH}  (top of the scroll/stretch zone)
   if (anchorCy != null) {
     if (LINE_KIND === 'divider') {
-      out.elasticZone = { topCy: round(anchorCy), minH: round(ELASTIC_MIN_H) };
+      out.elasticZone = { topCy: round3(anchorCy), minH: round3(ELASTIC_MIN_H) };
     } else {
-      out.anchorLine = { cx: 0.5, cy: round(anchorCy), w: 1, h: 0.04 };
+      out.anchorLine = { cx: 0.5, cy: round3(anchorCy), w: 1, h: 0.04 };
     }
   }
   return out;
 }
 
-function round(n) { return Math.round(n * 1000) / 1000; }
+function round(n) { return Math.round(n); }          // canvas px → integer
+function round3(n) { return Math.round(n * 1000) / 1000; }  // fractions (anchor line)
 
 // Build a fresh pack.json from the current working state (for write-back Save).
 // Disabled elements are dropped (real delete); duplicates become first-class
 // pack elements; geometry is folded in so output/ can be cleared afterwards.
 function buildPackManifest() {
-  const { w: CW, h: CH } = canvasPx();
   const out = Object.assign({}, manifest);   // preserve name/description/canvas/…
   out.elements = [];
   for (const el of elements) {
     if (el.enabled === false) continue;       // real delete on write-back
     let h = el.h;
-    if (h == null) {
-      const node = nodes.get(el.id);
-      h = node ? round(node.offsetHeight / CH) : undefined;
-    }
+    if (h == null) h = heightOf(el);   // measured, canvas px
     // start from the element's own persisted fields, minus editor-internal ones
     const def = {};
     for (const k of Object.keys(el)) {
       if (k === 'enabled' || k === '_added' || k.startsWith('_')) continue;
       def[k] = el[k];
     }
-    def.cx = round(el.cx); def.cy = round(el.cy); def.w = round(el.w);
-    if (h != null) def.h = h; else delete def.h;
+    def.x = round(el.x); def.y = round(el.y); def.w = round(el.w);
+    if (h != null) def.h = round(h); else delete def.h;
+    delete def.cx; delete def.cy;   // legacy center-origin fields, never re-emit
     if (el.rotation) def.rotation = Math.round(el.rotation * 10) / 10; else delete def.rotation;
     def.flipH = el.flipH || undefined;
     def.flipV = el.flipV || undefined;
     if (def.flipH === undefined) delete def.flipH;
     if (def.flipV === undefined) delete def.flipV;
     if (el.anchor && el.anchor !== 'baseline') def.anchor = el.anchor; else delete def.anchor;
+    if (el.label) def.label = el.label; else delete def.label;   // drop empty tag
     out.elements.push(def);
   }
   // fold the baseline/elastic-zone into the manifest too
@@ -1355,7 +1508,7 @@ async function saveDiff() {
 
 function resetSeed() {
   elements = (manifest.elements || []).map(el => Object.assign({}, el, {
-    cx: num(el.cx, 0.5), cy: num(el.cy, 0.5), w: num(el.w, 0.2),
+    x: num(el.x, 0), y: num(el.y, 0), w: num(el.w, 100),
     h: (typeof el.h === 'number') ? el.h : null,
     rotation: num(el.rotation, 0),
   }));

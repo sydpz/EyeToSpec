@@ -128,7 +128,7 @@ _DETAIL_FIELDS = {
     "frame": ("aspect",),
 }
 # Common (type-agnostic) geometry/orientation fields copied verbatim.
-_COMMON_FIELDS = ("cx", "cy", "w", "h", "rotation", "flipH", "flipV", "alpha")
+_COMMON_FIELDS = ("x", "y", "w", "h", "rotation", "flipH", "flipV", "alpha", "label")
 
 
 def _num(v, d):
@@ -155,7 +155,7 @@ def _resolve_file(el, tex, profiles):
 
 def _flatten_element(eid, spec, profiles):
     """One contract element (keyed object entry) -> a flat render node the
-    front-end draws: {id, type, depth, cx, cy, w, [h], <detail fields>, [file]}.
+    front-end draws: {id, type, depth, x, y, w, [h], <detail fields>, [file]}.
 
     Pure projection: copies common geometry + type-specific detail verbatim,
     resolves an image/frame `tex` to a `file`. NO coordinate math — absolute
@@ -191,6 +191,25 @@ def _load_asset_profiles(profiles_path):
     except (OSError, json.JSONDecodeError, TypeError):
         pass
     return out
+
+
+def pack_repo_asset_root(pack_dir):
+    """If a pack.json opts into game texture-key resolution, its images live in
+    the game repo (not the pack's own assets/). Return the absolute directory
+    those files hang off — `<repo>/<resourceRoot>` — or None if the pack doesn't
+    declare both. Used by the /assets route to serve real game art."""
+    manifest = os.path.join(pack_dir, "pack.json")
+    if not os.path.isfile(manifest):
+        return None
+    try:
+        with open(manifest, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    repo, res = raw.get("repo"), raw.get("resourceRoot")
+    if isinstance(repo, str) and isinstance(res, str):
+        return _expand(os.path.join(repo, res))
+    return None
 
 
 def build_manifest(pack_dir, raw):
@@ -232,6 +251,11 @@ def build_manifest(pack_dir, raw):
         "canvas": {"w": cw, "h": ch},
         "background": raw.get("background"),
         "elements": nodes,
+        # `env` = device-chrome components (phone frame + safe areas + wx capsule).
+        # Declarative: whatever is configured gets drawn, absent → not drawn. Passed
+        # through verbatim; the game公共库 ignores it (like `runtime`), it's an
+        # EyeToSpec-only viewport hint, never a canvas element.
+        "env": raw.get("env") if isinstance(raw.get("env"), dict) else None,
     }
 
 
@@ -441,6 +465,24 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/assets/"):
             rel = path[len("/assets/"):]
             segs = rel.split("/")
+            # Preferred: pack id comes from the ?pack= query, and the whole path
+            # after /assets/ is the file relative to that pack's asset root. This
+            # is how game-config packs (single or grouped id) request real art.
+            q_pack = parse_qs(urlparse(self.path).query).get("pack", [None])[0]
+            if q_pack and is_safe_id(q_pack):
+                config_pack_dir = os.path.join(CONFIG_DIR, *q_pack.split("/"))
+                file_segs = segs
+                repo_root = pack_repo_asset_root(config_pack_dir)
+                if repo_root:
+                    abspath = os.path.normpath(os.path.join(repo_root, *file_segs))
+                    if abspath.startswith(repo_root + os.sep) and os.path.isfile(abspath):
+                        return self.send_file(abspath)
+                pack_dir = os.path.join(config_pack_dir, "assets")
+                abspath = os.path.normpath(os.path.join(pack_dir, *file_segs))
+                if abspath.startswith(pack_dir + os.sep) and os.path.isfile(abspath):
+                    return self.send_file(abspath)
+            # Fallback: derive pack id from the leading path segment(s) — the old
+            # /assets/<pack>/<file> convention for hand-authored grouped frames.
             for depth in (2, 1):
                 if len(segs) <= depth:
                     continue
@@ -448,6 +490,13 @@ class Handler(BaseHTTPRequestHandler):
                 if not is_safe_id(pack_id):
                     continue
                 config_pack_dir = os.path.join(CONFIG_DIR, *segs[:depth])
+                # Game-config packs (assetProfiles + repo + resourceRoot) serve
+                # real art from the repo; hand-authored packs use their assets/.
+                repo_root = pack_repo_asset_root(config_pack_dir)
+                if repo_root:
+                    abspath = os.path.normpath(os.path.join(repo_root, *segs[depth:]))
+                    if abspath.startswith(repo_root + os.sep) and os.path.isfile(abspath):
+                        return self.send_file(abspath)
                 pack_dir = os.path.join(config_pack_dir, "assets")
                 abspath = os.path.normpath(os.path.join(pack_dir, *segs[depth:]))
                 if abspath.startswith(pack_dir + os.sep) and os.path.isfile(abspath):

@@ -290,6 +290,55 @@ code {
   white-space: nowrap;
 }
 
+/* --- env: device-chrome components (declarative, from pack.json `env`) -----
+ * phone frame + safe areas + wx capsule. Non-interactive overlays that hang off
+ * env.frame; drawn only when configured. NOT canvas elements. */
+.env-frame {
+  position: absolute;
+  pointer-events: none;
+  border: 3px solid rgba(120, 200, 255, 0.85);
+  border-radius: 14px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+  z-index: 48;
+}
+.env-safe {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(255, 60, 60, 0.14);
+  z-index: 49;
+}
+.env-safe-top { border-bottom: 2px dashed rgba(255, 40, 40, 0.8); }
+.env-safe-bottom { border-top: 2px dashed rgba(255, 40, 40, 0.8); }
+.env-safe-label {
+  position: absolute;
+  font: 600 10px/1.3 system-ui, sans-serif;
+  color: #fff;
+  background: rgba(220, 30, 30, 0.88);
+  padding: 1px 5px;
+  border-radius: 3px;
+  left: 6px;
+}
+.env-safe-top .env-safe-label { bottom: 3px; }
+.env-safe-bottom .env-safe-label { top: 3px; }
+.env-capsule {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(255, 170, 40, 0.18);
+  border: 2px dashed rgba(255, 150, 20, 0.9);
+  border-radius: 999px;
+  z-index: 51;
+}
+.env-capsule-label {
+  position: absolute;
+  bottom: -18px; right: 0;
+  font: 600 10px/1.3 system-ui, sans-serif;
+  color: #fff;
+  background: rgba(210, 130, 10, 0.92);
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
 /* --- baseline / anchor line (draggable) -----------------------------------
  * One horizontal line per pack marking the reference row (barn edge / divider).
  * Dragged onto the reference object; exported as anchorLine.cy. */
@@ -494,6 +543,17 @@ code {
 .el-name { font-family: ui-monospace, Menlo, monospace; font-size: 0.82rem; flex: 1; }
 .el-kind { font-size: 0.68rem; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.05em; }
 .el-tag { font-size: 0.6rem; color: var(--accent, #7c8cff); border: 1px solid currentColor; border-radius: 4px; padding: 0 0.25rem; text-transform: uppercase; }
+.el-label-tag { color: #6ecf9a; }
+.label-filter {
+  width: 100%;
+  margin: 0 0 0.5rem;
+  padding: 0.3rem 0.4rem;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  font-size: 0.78rem;
+}
 .el-toggle { background: none; border: none; cursor: pointer; font-size: 0.85rem; padding: 0 0.15rem; opacity: 0.6; }
 .el-toggle:hover { opacity: 1; }
 
@@ -521,6 +581,18 @@ code {
   width: 100%;
 }
 .insp-grid input:focus { outline: none; border-color: var(--accent); }
+.insp-label { margin-top: 0.7rem; }
+.insp-label label {
+  display: flex; flex-direction: column; gap: 0.25rem;
+  font-size: 0.72rem; color: var(--text-faint);
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.insp-label input {
+  font: inherit; font-size: 0.85rem;
+  background: var(--bg); border: 1px solid var(--border-strong);
+  color: var(--text); border-radius: 6px; padding: 0.35rem 0.5rem; width: 100%;
+}
+.insp-label input:focus { outline: none; border-color: var(--accent); }
 .insp-text {
   display: grid; grid-template-columns: 2fr 1fr auto; gap: 0.55rem; margin-top: 0.7rem;
   align-items: end;
