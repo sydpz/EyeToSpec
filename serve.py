@@ -274,6 +274,295 @@ def _num(v, d):
     return v if isinstance(v, (int, float)) else d
 
 
+# --- top-elastic projection (mode == "top-elastic") -------------------------
+# The loadout BASE pack (resolveLoadoutBaseLayout): a topbar + a deploy row of N
+# slots generated from a cx[] array, all anchored to the safe-area TOP. Editor cy
+# == offsetTop directly (the safe band is a review overlay the editor draws
+# separately, NOT subtracted — same convention as the baseline TOP group). Deploy
+# inner parts (portrait/remove/plus) are dx/dy offsets from a slot center (dx a
+# fraction of W, dy a fraction of H), SHARED across all slots, so we project them
+# once anchored to slot 1 and re-derive dx/dy from that slot on save.
+_TOP_ELASTIC_TOPBAR = ("back", "board", "title", "egg", "eggNum")
+# (part-key, writes-own-w). portrait carries no w in the schema (it uses
+# portraitScale × the live tower width at runtime); we give it a placeholder
+# display box on projection but never write a w back.
+_TOP_ELASTIC_DEPLOY_PARTS = (("portrait", False), ("remove", True), ("plus", True))
+
+
+def _resolve_file(el, tex, profiles):
+    """Attach the resolved asset file to an element if its tex is known."""
+    if tex and tex in profiles:
+        scene, fmt = profiles[tex]
+        el["file"] = "%s/%s.%s" % (scene, tex, fmt)
+
+
+def _project_top_elastic(layout, profiles):
+    """Project the loadout BASE pack → draggable editor elements.
+
+    topbar.<name>       cx=cx,           cy=offsetTop,        w=w
+    deploy.slot.<i>     cx=cx[i-1],      cy=offsetTop,        w=deploy.w   (1-based)
+    deploy.<part>       cx=cx[0]+dx,     cy=offsetTop+dy,     w=part.w
+
+    Mirrors resolveLoadoutBaseLayout at editor scale (safeArea.top=0)."""
+    out = []
+    topbar = layout.get("topbar")
+    if isinstance(topbar, dict):
+        for name in _TOP_ELASTIC_TOPBAR:
+            e = topbar.get(name)
+            if not isinstance(e, dict) or "cx" not in e:
+                continue
+            el = {"id": "topbar" + _ROW_SEP + name,
+                  "cx": _num(e.get("cx"), 0.5),
+                  "cy": _num(e.get("offsetTop"), 0.0)}
+            if isinstance(e.get("w"), (int, float)):
+                el["w"] = e["w"]
+            _resolve_file(el, e.get("tex"), profiles)
+            out.append(el)
+    dep = layout.get("deploy")
+    if isinstance(dep, dict):
+        cx_arr = dep.get("cx")
+        off_top = _num(dep.get("offsetTop"), 0.0)
+        dep_w = dep.get("w")
+        if isinstance(cx_arr, list) and cx_arr:
+            for i, cx in enumerate(cx_arr, start=1):
+                el = {"id": "deploy" + _ROW_SEP + "slot" + _ROW_SEP + str(i),
+                      "cx": _num(cx, 0.5), "cy": off_top}
+                if isinstance(dep_w, (int, float)):
+                    el["w"] = dep_w
+                out.append(el)
+            # inner parts anchored to slot 1 (first) center
+            anchor_cx = _num(cx_arr[0], 0.5)
+            pscale = _num(dep.get("portraitScale"), 1.0)
+            for part, _has_w in _TOP_ELASTIC_DEPLOY_PARTS:
+                pv = dep.get(part)
+                if not isinstance(pv, dict):
+                    continue
+                el = {"id": "deploy" + _ROW_SEP + part,
+                      "cx": anchor_cx + _num(pv.get("dx"), 0.0),
+                      "cy": off_top + _num(pv.get("dy"), 0.0)}
+                if isinstance(pv.get("w"), (int, float)):
+                    el["w"] = pv["w"]
+                elif part == "portrait" and isinstance(dep_w, (int, float)):
+                    el["w"] = round(dep_w * pscale, 6)  # placeholder display box
+                _resolve_file(el, pv.get("tex"), profiles)
+                out.append(el)
+    return out
+
+
+def _invert_top_elastic(layout, edited):
+    """Fold edited BASE elements back into the layout's nested schema:
+    topbar.<name> → cx/offsetTop/w; deploy.slot.<i> → cx[i-1] + shared offsetTop/w;
+    deploy.<part> → dx/dy relative to the (edited) slot-1 center. cx/w round to 6;
+    offsets keep 6 places (finer than baseline's 4 — this page is dy-sensitive)."""
+    topbar = layout.get("topbar")
+    if isinstance(topbar, dict):
+        for name in _TOP_ELASTIC_TOPBAR:
+            el = edited.get("topbar" + _ROW_SEP + name)
+            tgt = topbar.get(name)
+            if el is None or not isinstance(tgt, dict):
+                continue
+            if "cx" in el:
+                tgt["cx"] = round(float(el["cx"]), 6)
+            if isinstance(el.get("cy"), (int, float)):
+                tgt["offsetTop"] = round(float(el["cy"]), 6)
+            if "w" in el:
+                tgt["w"] = round(float(el["w"]), 6)
+    dep = layout.get("deploy")
+    if not isinstance(dep, dict):
+        return
+    cx_arr = dep.get("cx")
+    if isinstance(cx_arr, list) and cx_arr:
+        slot_cys, slot_ws = [], []
+        for i in range(1, len(cx_arr) + 1):
+            el = edited.get("deploy" + _ROW_SEP + "slot" + _ROW_SEP + str(i))
+            if el is None:
+                continue
+            if "cx" in el:
+                cx_arr[i - 1] = round(float(el["cx"]), 6)
+            if isinstance(el.get("cy"), (int, float)):
+                slot_cys.append(float(el["cy"]))
+            if "w" in el:
+                slot_ws.append(float(el["w"]))
+        # slots share one offsetTop / w — take the mean of what was dragged.
+        if slot_cys:
+            dep["offsetTop"] = round(sum(slot_cys) / len(slot_cys), 6)
+        if slot_ws:
+            dep["w"] = round(sum(slot_ws) / len(slot_ws), 6)
+    # anchor for inner parts = the (now-updated) slot-1 center.
+    anchor_cx = _num(cx_arr[0], 0.5) if isinstance(cx_arr, list) and cx_arr else 0.5
+    anchor_cy = _num(dep.get("offsetTop"), 0.0)
+    for part, has_w in _TOP_ELASTIC_DEPLOY_PARTS:
+        el = edited.get("deploy" + _ROW_SEP + part)
+        tgt = dep.get(part)
+        if el is None or not isinstance(tgt, dict):
+            continue
+        if "cx" in el:
+            tgt["dx"] = round(float(el["cx"]) - anchor_cx, 6)
+        if isinstance(el.get("cy"), (int, float)):
+            tgt["dy"] = round(float(el["cy"]) - anchor_cy, 6)
+        if has_w and "w" in el:
+            tgt["w"] = round(float(el["w"]), 6)
+
+
+# --- overlay projection (mode == "overlay") ---------------------------------
+# The loadout PANEL pack (resolveLoadoutPanelLayout). This pack's OWN canvas
+# origin IS the overlay top (projected with overlayTop=0; at runtime the game
+# re-bases it under the deploy row). Grid centers come from colCx[] × rows
+# generated by firstCy/rowPitch; one vertical unit is frac×designH×widthScale
+# (widthScale = canvas_w/720), normalized by canvas_h → k = designH·widthScale/
+# canvas_h. Card inner parts + mystery are dx/dy offsets from a card center (dx a
+# fraction of W, dy scaled by the same k). We project a small grid of card-center
+# MARKERS (tune colCx/firstCy/rowPitch) + ONE reference card's inner parts + the
+# mystery parts (tune the shared dx/dy/w).
+_OVERLAY_CARD_PARTS = ("frame", "portrait", "fpbox", "fplabel", "hex", "hexnum",
+                       "ribbon", "btn", "arrow")
+_OVERLAY_MYSTERY_PARTS = ("box", "label")
+_OVERLAY_GRID_ROWS = 2  # sample rows projected as draggable card-center markers
+
+
+def _overlay_k(layout, canvas):
+    """The vertical-unit factor: a design-height fraction × k == a canvas-height
+    fraction. k = designH · (canvas_w/720) / canvas_h."""
+    overlay = layout.get("overlay") if isinstance(layout.get("overlay"), dict) else {}
+    ch = _num(canvas.get("h"), 1600)
+    cw = _num(canvas.get("w"), 720)
+    design_h = _num(overlay.get("designH"), ch)
+    if ch == 0:
+        return 1.0
+    return design_h * (cw / 720.0) / ch
+
+
+def _project_overlay(layout, canvas, profiles):
+    """Project the loadout PANEL pack → draggable editor elements.
+
+    grid.r<row>c<col>   card-center markers (2×ncols): cx=colCx[col], cy=(firstCy+row·rowPitch)·k
+    card.<part>         cx=colCx[0]+dx,  cy=row0Center+dy·k,  w=part.w
+    mystery.<part>      cx=colCx[0]+dx,  cy=row1Center+dy·k,  w=part.w
+
+    Mirrors resolveLoadoutPanelLayout with overlayTop=0, normalized by canvas."""
+    out = []
+    grid = layout.get("grid") if isinstance(layout.get("grid"), dict) else {}
+    col_cx = grid.get("colCx")
+    if not isinstance(col_cx, list) or not col_cx:
+        col_cx = [0.5]
+    first_cy = _num(grid.get("firstCy"), 0.0)
+    row_pitch = _num(grid.get("rowPitch"), 0.0)
+    k = _overlay_k(layout, canvas)
+
+    def center_cy(row):
+        return (first_cy + row * row_pitch) * k
+
+    ncols = len(col_cx)
+    card = layout.get("card") if isinstance(layout.get("card"), dict) else {}
+    frame_w = (card.get("frame") or {}).get("w") if isinstance(card.get("frame"), dict) else None
+    for row in range(_OVERLAY_GRID_ROWS):
+        for col in range(ncols):
+            el = {"id": "grid" + _ROW_SEP + ("r%dc%d" % (row, col)),
+                  "cx": _num(col_cx[col], 0.5), "cy": center_cy(row)}
+            if isinstance(frame_w, (int, float)):
+                el["w"] = frame_w
+            out.append(el)
+    # reference card inner parts anchored to grid r0c0 center.
+    ref0_cx = _num(col_cx[0], 0.5)
+    ref0_cy = center_cy(0)
+    for part in _OVERLAY_CARD_PARTS:
+        pv = card.get(part)
+        if not isinstance(pv, dict):
+            continue
+        el = {"id": "card" + _ROW_SEP + part,
+              "cx": ref0_cx + _num(pv.get("dx"), 0.0),
+              "cy": ref0_cy + _num(pv.get("dy"), 0.0) * k}
+        if isinstance(pv.get("w"), (int, float)):
+            el["w"] = pv["w"]
+        _resolve_file(el, pv.get("tex"), profiles)
+        out.append(el)
+    # mystery parts anchored to grid r1c0 center (a different cell → no overlap
+    # with the reference card). dx is still relative to col 0.
+    mys = layout.get("mystery") if isinstance(layout.get("mystery"), dict) else {}
+    ref1_cy = center_cy(1 if _OVERLAY_GRID_ROWS > 1 else 0)
+    for part in _OVERLAY_MYSTERY_PARTS:
+        pv = mys.get(part)
+        if not isinstance(pv, dict):
+            continue
+        el = {"id": "mystery" + _ROW_SEP + part,
+              "cx": ref0_cx + _num(pv.get("dx"), 0.0),
+              "cy": ref1_cy + _num(pv.get("dy"), 0.0) * k}
+        if isinstance(pv.get("w"), (int, float)):
+            el["w"] = pv["w"]
+        _resolve_file(el, pv.get("tex"), profiles)
+        out.append(el)
+    return out
+
+
+def _invert_overlay(layout, canvas, edited):
+    """Fold edited PANEL elements back into the nested schema:
+    grid markers → colCx[] (per-column mean) + firstCy (row-0 mean) + rowPitch
+    (row1−row0, both divided back through k); card.<part> → dx/dy/w relative to
+    the (updated) row-0 center; mystery.<part> → dx (vs col 0) / dy (vs row-1)/w."""
+    k = _overlay_k(layout, canvas)
+    inv_k = (1.0 / k) if k else 1.0
+    grid = layout.get("grid")
+    col_cx = grid.get("colCx") if isinstance(grid, dict) else None
+    ncols = len(col_cx) if isinstance(col_cx, list) and col_cx else 1
+
+    markers = {}
+    for row in range(_OVERLAY_GRID_ROWS):
+        for col in range(ncols):
+            el = edited.get("grid" + _ROW_SEP + ("r%dc%d" % (row, col)))
+            if el is not None:
+                markers[(row, col)] = el
+
+    if isinstance(grid, dict):
+        if isinstance(col_cx, list):
+            for col in range(ncols):
+                xs = [float(markers[(r, col)]["cx"]) for r in range(_OVERLAY_GRID_ROWS)
+                      if (r, col) in markers and "cx" in markers[(r, col)]]
+                if xs:
+                    col_cx[col] = round(sum(xs) / len(xs), 6)
+        row0 = [float(markers[(0, c)]["cy"]) for c in range(ncols)
+                if (0, c) in markers and isinstance(markers[(0, c)].get("cy"), (int, float))]
+        row1 = [float(markers[(1, c)]["cy"]) for c in range(ncols)
+                if (1, c) in markers and isinstance(markers[(1, c)].get("cy"), (int, float))]
+        if row0:
+            grid["firstCy"] = round((sum(row0) / len(row0)) * inv_k, 6)
+        if row0 and row1:
+            grid["rowPitch"] = round((sum(row1) / len(row1) - sum(row0) / len(row0)) * inv_k, 6)
+
+    # recompute reference centers from the (updated) grid for part inversion.
+    first_cy = _num(grid.get("firstCy"), 0.0) if isinstance(grid, dict) else 0.0
+    row_pitch = _num(grid.get("rowPitch"), 0.0) if isinstance(grid, dict) else 0.0
+    ref0_cx = _num(col_cx[0], 0.5) if isinstance(col_cx, list) and col_cx else 0.5
+    ref0_cy = first_cy * k
+    ref1_cy = (first_cy + row_pitch) * k
+
+    card = layout.get("card")
+    if isinstance(card, dict):
+        for part in _OVERLAY_CARD_PARTS:
+            el = edited.get("card" + _ROW_SEP + part)
+            tgt = card.get(part)
+            if el is None or not isinstance(tgt, dict):
+                continue
+            if "cx" in el:
+                tgt["dx"] = round(float(el["cx"]) - ref0_cx, 6)
+            if isinstance(el.get("cy"), (int, float)):
+                tgt["dy"] = round((float(el["cy"]) - ref0_cy) * inv_k, 6)
+            if "w" in el:
+                tgt["w"] = round(float(el["w"]), 6)
+    mys = layout.get("mystery")
+    if isinstance(mys, dict):
+        for part in _OVERLAY_MYSTERY_PARTS:
+            el = edited.get("mystery" + _ROW_SEP + part)
+            tgt = mys.get(part)
+            if el is None or not isinstance(tgt, dict):
+                continue
+            if "cx" in el:
+                tgt["dx"] = round(float(el["cx"]) - ref0_cx, 6)
+            if isinstance(el.get("cy"), (int, float)):
+                tgt["dy"] = round((float(el["cy"]) - ref1_cy) * inv_k, 6)
+            if "w" in el:
+                tgt["w"] = round(float(el["w"]), 6)
+
+
 def _expand(path):
     return os.path.abspath(os.path.expanduser(path))
 
@@ -321,6 +610,34 @@ def build_source_manifest(source):
     mode = layout.get("mode")
     is_baseline = mode == "baseline-layout"
     baseline_ratio = _num(layout.get("baselineRatio"), 0.5)
+
+    # Loadout two-pack (nested / generative schemas): the topbar+deploy BASE pack
+    # (top-elastic) and the grid+card+mystery PANEL pack (overlay) don't carry
+    # literal top-level cx/cy, so the flat loop below can't see them. Project them
+    # into draggable elements with dedicated helpers whose math mirrors the game's
+    # resolveLoadout*Layout exactly.
+    if mode in ("top-elastic", "overlay"):
+        if mode == "top-elastic":
+            elements = _project_top_elastic(layout, profiles)
+        else:
+            elements = _project_overlay(layout, canvas, profiles)
+        manifest = {
+            "name": source.get("name") or meta.get("name") or "",
+            "description": source.get("_comment", ""),
+            "canvas": canvas,
+            "elements": elements,
+        }
+        safe = meta.get("safeArea")
+        if isinstance(safe, dict):
+            manifest["safe"] = {"top": safe.get("top", 0), "bottom": safe.get("bottom", 0)}
+        bg = meta.get("background")
+        if isinstance(bg, dict) and bg.get("tex") in profiles:
+            scene, fmt = profiles[bg["tex"]]
+            manifest["background"] = {"file": "%s/%s.%s" % (scene, bg["tex"], fmt),
+                                      "cover": bool(bg.get("cover"))}
+        if meta.get("showCapsule"):
+            manifest["showCapsule"] = True
+        return manifest, resource_root
 
     elements = []
     for key, v in layout.items():
@@ -406,6 +723,21 @@ def write_source_manifest(source, manifest):
         layout = json.load(f)
     edited = {el["id"]: el for el in manifest.get("elements", []) if isinstance(el, dict) and "id" in el}
     added = 0
+
+    mode = layout.get("mode")
+    # Loadout two-pack: invert the dedicated projections straight back into the
+    # nested schema, preserving tex / _eyetospec / metadata (never a flat write).
+    if mode in ("top-elastic", "overlay"):
+        if mode == "top-elastic":
+            _invert_top_elastic(layout, edited)
+        else:
+            meta = layout.get("_eyetospec", {}) if isinstance(layout, dict) else {}
+            canvas = meta.get("canvas", {"w": 720, "h": 1600})
+            _invert_overlay(layout, canvas, edited)
+        with open(layout_path, "w", encoding="utf-8") as f:
+            json.dump(layout, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        return layout_path, added
 
     is_baseline = layout.get("mode") == "baseline-layout"
     # Baseline pages: the dragged baseline (anchorLine.cy) is the new pin AND the
