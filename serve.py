@@ -375,11 +375,53 @@ def _project_top_elastic(layout, profiles):
     return out
 
 
+def _invert_flat_elements(layout, edited):
+    """Fold edited elements back into a FLAT top-elastic layout (shop/henhouse/
+    challenge). The inverse of _project_flat_elements: for each edited element,
+    update the matching top-level key's placement + text fields in place; delete
+    keys the editor removed (soft-delete → dropped from the manifest); materialize
+    duplicated keys (recover `tex` from the file basename). Preserves tex/metadata
+    on untouched keys — never rewrites the whole schema."""
+    # Delete: any placeable element key present in the layout but absent from the
+    # edited manifest was soft-deleted in the editor (buildPackManifest drops it).
+    existing = [k for k, v in layout.items()
+                if k not in _LAYOUT_META_KEYS and isinstance(v, dict)
+                and "cx" in v and "cy" in v]
+    for k in existing:
+        if k not in edited:
+            del layout[k]
+
+    for key, el in edited.items():
+        if key in _LAYOUT_META_KEYS:
+            continue
+        target = layout.get(key)
+        if not isinstance(target, dict):
+            # Duplicated element the source doesn't have yet. The manifest carries
+            # `file` (scene/tex.fmt) not `tex`, so recover the game's tex key.
+            target = {}
+            file = el.get("file")
+            if isinstance(file, str) and file:
+                target["tex"] = os.path.splitext(os.path.basename(file))[0]
+            layout[key] = target
+        for fld in _ELEM_PASS:
+            if fld in el and el[fld] is not None:
+                v = el[fld]
+                if fld in ("cx", "cy", "w", "h") and isinstance(v, (int, float)):
+                    v = round(float(v), 4)
+                target[fld] = v
+
+
 def _invert_top_elastic(layout, edited):
     """Fold edited BASE elements back into the layout's nested schema:
     topbar.<name> → cx/offsetTop/w; deploy.slot.<i> → cx[i-1] + shared offsetTop/w;
     deploy.<part> → dx/dy relative to the (edited) slot-1 center. cx/w round to 6;
-    offsets keep 6 places (finer than baseline's 4 — this page is dy-sensitive)."""
+    offsets keep 6 places (finer than baseline's 4 — this page is dy-sensitive).
+
+    Flat pages (shop/henhouse/challenge) reuse mode "top-elastic" but have NO
+    nested topbar/deploy dicts — fall back to the flat inverter for them."""
+    if not isinstance(layout.get("topbar"), dict) and not isinstance(layout.get("deploy"), dict):
+        _invert_flat_elements(layout, edited)
+        return
     topbar = layout.get("topbar")
     if isinstance(topbar, dict):
         for name in _TOP_ELASTIC_TOPBAR:
@@ -892,6 +934,38 @@ def build_source_manifest(source):
     return manifest, resource_root
 
 
+def _verify_writeback_schema(layout, edited):
+    """Guard against the silent-drop class of bug: the edited manifest's element
+    ids must fit the schema the layout will be inverted through, or the save would
+    write nothing (or the wrong thing) while reporting success.
+
+    The known trap: mode "top-elastic" is shared by the loadout (NESTED topbar/
+    deploy dicts, ids like "topbar.back"/"deploy.slot.1") and the flat pages
+    (shop/henhouse/challenge, ids are plain top-level keys). If an edited id set
+    that clearly belongs to one shape arrives for a layout of the other shape,
+    raise ValueError so the POST fails loudly instead of dropping edits."""
+    if layout.get("mode") != "top-elastic":
+        return  # baseline / overlay have their own dedicated, matched inverters
+    is_nested = isinstance(layout.get("topbar"), dict) or isinstance(layout.get("deploy"), dict)
+    ids = [k for k in edited if k not in _LAYOUT_META_KEYS]
+    if not ids:
+        return
+    nested_ids = [k for k in ids if k.startswith("topbar" + _ROW_SEP) or k.startswith("deploy" + _ROW_SEP)]
+    if is_nested and not nested_ids:
+        raise ValueError(
+            "schema mismatch: layout uses the NESTED top-elastic schema "
+            "(topbar/deploy dicts) but no edited element ids match it — refusing "
+            "to save (edits would be silently dropped)")
+    if not is_nested:
+        # Flat layout: every edited id (that isn't a duplicate the editor created)
+        # should be an existing top-level placeable key. A stray nested id means
+        # the manifest was built for the wrong schema.
+        if nested_ids:
+            raise ValueError(
+                "schema mismatch: layout uses the FLAT top-elastic schema (plain "
+                "top-level keys) but got nested ids %s — refusing to save" % nested_ids[:3])
+
+
 def write_source_manifest(source, manifest):
     """Write an edited manifest BACK into the source-bound game layout file.
 
@@ -910,6 +984,12 @@ def write_source_manifest(source, manifest):
         layout = json.load(f)
     edited = {el["id"]: el for el in manifest.get("elements", []) if isinstance(el, dict) and "id" in el}
     added = 0
+
+    # Preflight: the edited element ids must match the schema the layout actually
+    # uses, so a save can never silently drop edits (the top-elastic schema
+    # collision: nested topbar/deploy vs flat top-level keys). Raise → the POST
+    # returns 500 and the editor toasts the error instead of faking success.
+    _verify_writeback_schema(layout, edited)
 
     mode = layout.get("mode")
     # Loadout two-pack: invert the dedicated projections straight back into the
