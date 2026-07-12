@@ -349,12 +349,14 @@ def _project_top_elastic(layout, profiles):
         cx_arr = dep.get("cx")
         off_top = _num(dep.get("offsetTop"), 0.0)
         dep_w = dep.get("w")
+        slot_tex = dep.get("slotTex")
         if isinstance(cx_arr, list) and cx_arr:
             for i, cx in enumerate(cx_arr, start=1):
                 el = {"id": "deploy" + _ROW_SEP + "slot" + _ROW_SEP + str(i),
                       "cx": _num(cx, 0.5), "cy": off_top}
                 if isinstance(dep_w, (int, float)):
                     el["w"] = dep_w
+                _resolve_file(el, slot_tex, profiles)  # 5 slots share one slotTex
                 out.append(el)
             # inner parts anchored to slot 1 (first) center
             anchor_cx = _num(cx_arr[0], 0.5)
@@ -522,13 +524,16 @@ def _project_overlay(layout, canvas, profiles):
 
     ncols = len(col_cx)
     card = layout.get("card") if isinstance(layout.get("card"), dict) else {}
-    frame_w = (card.get("frame") or {}).get("w") if isinstance(card.get("frame"), dict) else None
+    frame = card.get("frame") if isinstance(card.get("frame"), dict) else {}
+    frame_w = frame.get("w")
+    frame_tex = frame.get("tex")  # each grid cell shows the card frame art
     for row in range(_OVERLAY_GRID_ROWS):
         for col in range(ncols):
             el = {"id": "grid" + _ROW_SEP + ("r%dc%d" % (row, col)),
                   "cx": _num(col_cx[col], 0.5), "cy": center_cy(row)}
             if isinstance(frame_w, (int, float)):
                 el["w"] = frame_w
+            _resolve_file(el, frame_tex, profiles)
             out.append(el)
     # reference card inner parts anchored to grid r0c0 center.
     ref0_cx = _num(col_cx[0], 0.5)
