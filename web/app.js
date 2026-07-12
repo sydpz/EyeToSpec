@@ -304,31 +304,45 @@ function applyCanvasBackground() {
   const bg = manifest.background;
   if (bg && bg.file) {
     canvasEl.classList.remove('checker');
-    if (bg.fit === 'width-top') {
+    if (bg.fit === 'width-top' || bg.fit === 'width-bottom') {
       // The game draws this bg via fillBackgroundWidth: WIDTH-filled (100%) +
-      // TOP-anchored + overflow-cropped (never contain-centered). Render a single
+      // anchored + overflow-cropped (never contain-centered). Render a single
       // .bg-layer to match — same model as the combine stacked layers — so the
       // owner sees elements sitting on the bg where they truly land at runtime.
       // A repeating bg (overlay grass body) tiles downward to fill the canvas.
+      // width-bottom pins the art to the canvas BOTTOM (crops the TOP) — the
+      // baseline-anchored pages (endless) whose tall bg overflows upward.
+      const bottomAnchored = bg.fit === 'width-bottom';
       canvasEl.style.backgroundImage = '';
       const div = document.createElement('div');
       div.className = 'bg-layer';
       div.dataset.repeat = bg.repeat ? '1' : '';
       div.style.backgroundImage = `url("${bgUrl(bg.file)}")`;
       div.style.backgroundRepeat = bg.repeat ? 'repeat-y' : 'no-repeat';
-      div.style.backgroundPosition = 'top center';
+      div.style.backgroundPosition = (bottomAnchored ? 'bottom' : 'top') + ' center';
       div.style.backgroundSize = '100% auto';
       div.style.left = '0';
       div.style.width = '100%';
-      // topCy (0..1): the panel scroll-bg tucks its top under the head at the real
-      // screen y, not y=0. Stash it so positionBgLayers (which runs on every
-      // layout and would otherwise reset top to 0) seats the layer there — the bg
-      // peeks just above the guide line, candidates below (scene base+panel model).
-      if (Number.isFinite(bg.topCy)) div.dataset.topCy = String(bg.topCy);
-      div.style.top = (Number.isFinite(bg.topCy) ? bg.topCy * 100 : 0) + '%';
-      div.style.bottom = '0';
-      canvasEl.appendChild(div);
-      positionBgLayers();
+      if (bottomAnchored) {
+        // Bottom-pinned: the layer fills the whole canvas and CSS bottom-center
+        // background-position shows the art's bottom, cropping the overflow off
+        // the top — exactly the game's baseline anchor. Skip positionBgLayers
+        // (it re-seats from the top for the stacked/top model).
+        div.dataset.bottomAnchored = '1';
+        div.style.top = '0';
+        div.style.bottom = '0';
+        canvasEl.appendChild(div);
+      } else {
+        // topCy (0..1): the panel scroll-bg tucks its top under the head at the real
+        // screen y, not y=0. Stash it so positionBgLayers (which runs on every
+        // layout and would otherwise reset top to 0) seats the layer there — the bg
+        // peeks just above the guide line, candidates below (scene base+panel model).
+        if (Number.isFinite(bg.topCy)) div.dataset.topCy = String(bg.topCy);
+        div.style.top = (Number.isFinite(bg.topCy) ? bg.topCy * 100 : 0) + '%';
+        div.style.bottom = '0';
+        canvasEl.appendChild(div);
+        positionBgLayers();
+      }
     } else {
       // Other pages (home baseline): the bg is anchorY-centered, art bleeds off
       // top/bottom without side-crop — contain keeps it whole and centered.
@@ -352,6 +366,9 @@ function positionBgLayers() {
   // instead of stacking from 0 — the panel scroll-bg seats just under the head.
   let top = 0;
   divs.forEach((div, i) => {
+    // Bottom-anchored layers (width-bottom) are pinned via top:0/bottom:0 +
+    // background-position:bottom; the stacking pass doesn't apply to them.
+    if (div.dataset.bottomAnchored === '1') return;
     const tcy = parseFloat(div.dataset.topCy);
     if (i === 0 && Number.isFinite(tcy)) top = tcy * ch;
     div.style.left = '0';

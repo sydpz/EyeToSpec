@@ -317,7 +317,7 @@ def _project_flat_elements(layout, profiles):
     return out
 
 
-def _project_top_elastic(layout, profiles):
+def _project_top_elastic(layout, profiles, source=None, canvas=None):
     """Project the loadout BASE pack → draggable editor elements.
 
     topbar.<name>       cx=cx,           cy=offsetTop,        w=w
@@ -372,9 +372,51 @@ def _project_top_elastic(layout, profiles):
                     el["w"] = pv["w"]
                 elif part == "portrait" and isinstance(dep_w, (int, float)):
                     el["w"] = round(dep_w * pscale, 6)  # placeholder display box
-                _resolve_file(el, pv.get("tex"), profiles)
+                _resolve_file(el, pv.get("tex") or pv.get("calibTex"), profiles)
                 out.append(el)
+    # Optional read-only reference: a candidate-card frame from the sibling PANEL
+    # layout, drawn at the first deploy slot column so the owner can eyeball the
+    # height gap between an out-deploy slot and a candidate card, and decide
+    # whether to nudge the deploy row up. Declared via `refCardFrame` in the base
+    # source.json (points at the panel layout json). Id prefixed `ref` and marked
+    # readOnly so it never folds back into either config on save.
+    ref = _ref_card_frame(layout, source, canvas, profiles)
+    if ref:
+        out.append(ref)
     return out
+
+
+def _ref_card_frame(base_layout, source, canvas, profiles):
+    """Build a read-only candidate-card frame marker for the base editor, sized
+    and x-placed like the panel's card but y-anchored to the deploy row so the
+    two heights sit side by side. Returns None if not configured/resolvable."""
+    if not isinstance(source, dict):
+        return None
+    panel_rel = source.get("refCardFrame")
+    if not panel_rel:
+        return None
+    repo = _expand(source.get("repo", "~"))
+    try:
+        panel = json.load(open(os.path.join(repo, panel_rel), encoding="utf-8"))
+    except Exception:
+        return None
+    card = panel.get("card")
+    frame = card.get("frame") if isinstance(card, dict) else None
+    if not isinstance(frame, dict):
+        return None
+    dep = base_layout.get("deploy")
+    if not isinstance(dep, dict):
+        return None
+    cx_arr = dep.get("cx")
+    slot_cx = _num(cx_arr[0], 0.5) if isinstance(cx_arr, list) and cx_arr else 0.5
+    el = {"id": "ref" + _ROW_SEP + "cardFrame",
+          "cx": slot_cx,
+          "cy": _num(dep.get("offsetTop"), 0.0),
+          "readOnly": True}
+    if isinstance(frame.get("w"), (int, float)):
+        el["w"] = frame["w"]
+    _resolve_file(el, frame.get("tex"), profiles)
+    return el
 
 
 def _invert_flat_elements(layout, edited):
@@ -484,7 +526,10 @@ def _invert_top_elastic(layout, edited):
 # fraction of W, dy scaled by the same k). We project a small grid of card-center
 # MARKERS (tune colCx/firstCy/rowPitch) + ONE reference card's inner parts + the
 # mystery parts (tune the shared dx/dy/w).
-_OVERLAY_CARD_PARTS = ("frame", "portrait", "fpbox", "fplabel", "hex", "hexnum",
+# NOTE: "frame" is intentionally NOT here — the grid markers (grid.r0c0…) already
+# render the card frame art per cell. Re-adding it would double-draw the wood
+# frame on r0c0 (a real overlap bug). The card's INNER parts anchor to r0c0.
+_OVERLAY_CARD_PARTS = ("portrait", "fpbox", "fplabel", "hex", "hexnum",
                        "ribbon", "btn", "arrow")
 _OVERLAY_MYSTERY_PARTS = ("box", "label")
 _OVERLAY_GRID_ROWS = 2  # sample rows projected as draggable card-center markers
@@ -547,7 +592,9 @@ def _project_overlay(layout, canvas, profiles):
               "cy": ref0_cy + _num(pv.get("dy"), 0.0) * k}
         if isinstance(pv.get("w"), (int, float)):
             el["w"] = pv["w"]
-        _resolve_file(el, pv.get("tex"), profiles)
+        # calibTex = a preview-only portrait (大黄) for size calibration; the game
+        # never reads it (portraits are per-tower at runtime). tex wins if present.
+        _resolve_file(el, pv.get("tex") or pv.get("calibTex"), profiles)
         out.append(el)
     # mystery parts anchored to grid r1c0 center (a different cell → no overlap
     # with the reference card). dx is still relative to col 0.
@@ -783,6 +830,54 @@ def _combine_overlay_top(base_layout, panel_layout, canvas):
     return deploy_row_bottom + _num(overlay.get("gapTop"), 0.0) * w
 
 
+def _head_height_px(base_layout, canvas, resource_root, profiles):
+    """The fixed head's rendered bottom edge in canvas px, mirroring the scene:
+    headHeight = width × (bgTop natural height / natural width). The scene uses the
+    BG_TOP_SRC constant ratio; EyeToSpec draws the actual art, so we read the real
+    bg-top image aspect (≡ what's on screen). Falls back to the game's 904/1345."""
+    w = _num(canvas.get("w"), 720)
+    ratio = 904.0 / 1345.0
+    bg = base_layout.get("bg") if isinstance(base_layout.get("bg"), dict) else {}
+    tex = bg.get("top")
+    if tex in profiles:
+        scene, fmt = profiles[tex]
+        path = os.path.join(resource_root, scene, "%s.%s" % (tex, fmt))
+        try:
+            from PIL import Image
+            with Image.open(path) as im:
+                if im.width:
+                    ratio = im.height / im.width
+        except Exception:
+            pass
+    return w * ratio
+
+
+def _panel_screen_shift(source, panel_layout, canvas, resource_root, profiles):
+    """For a PANEL pack that declares `baseLayout`, return the screen-placement
+    geometry the scene composes at runtime, all as canvas-height fractions:
+      shift    = overlayTop/H     (candidate origin; every card cy shifts down by it)
+      head_cy  = headHeight/H     (fixed head's bottom edge — the read-only line)
+      bg_top_cy= (headHeight-tuck)/H  (scroll-bg top; tucks just above the line)
+    Returns None when no baseLayout is declared (pack stays overlay-local)."""
+    base_rel = source.get("baseLayout")
+    if not base_rel:
+        return None
+    repo = _expand(source.get("repo", "~"))
+    try:
+        base_layout = json.load(open(os.path.join(repo, base_rel), encoding="utf-8"))
+    except Exception:
+        return None
+    h = _num(canvas.get("h"), 1600)
+    w = _num(canvas.get("w"), 720)
+    if not h:
+        return None
+    overlay_top = _combine_overlay_top(base_layout, panel_layout, canvas)
+    head_px = _head_height_px(base_layout, canvas, resource_root, profiles)
+    tuck = max(2.0, round(w * 0.015))  # scene: Math.max(2, round(width*0.015))
+    return {"shift": overlay_top / h, "head_cy": head_px / h,
+            "bg_top_cy": (head_px - tuck) / h}
+
+
 def build_combine_manifest(source):
     """Build a stacked full-page manifest from a combine source. Returns
     (manifest, resource_root). Child element ids are prefixed role::id; PANEL
@@ -825,20 +920,16 @@ def build_combine_manifest(source):
     # sits exactly at the head's rendered cut line (the true runtime seam) and
     # tiles down (repeat) to fill the rest. Minimal + faithful: no hardcoded art
     # ratios in serve.py, robust to art-size changes.
-    # Mirror the game's buildGrassFloor exactly (3 physical layers, NOT a repeated
-    # bg-bottom): hut head once, then the bg-bottom transition piece (the one with
-    # the wooden beam that meets the head) once, then the SEAMLESS grass tile
-    # (panel _eyetospec.repeatTile → loadout-grass, beamless) repeated downward to
-    # fill. Repeating bg-bottom tiles its beam+fringe mid-page = false seams.
+    # Two physical layers, mirroring the game: the FIXED hut head (base bg-top,
+    # never scrolls) once, then the SCROLL body — a single pre-stitched long image
+    # (panel loadout-scroll-bg = bg-bottom + grass baked offline). Neither repeats;
+    # the scroll image already covers the candidate region. Its top tucks under the
+    # head (see guideLine / the game's tuck), so it's seated at the head's cut line.
     backgrounds = []
     if isinstance(base_man.get("background"), dict):
         backgrounds.append({"file": base_man["background"]["file"], "cover": False, "repeat": False})
     if isinstance(panel_man.get("background"), dict):
-        # transition piece: placed once, does NOT repeat.
         backgrounds.append({"file": panel_man["background"]["file"], "cover": False, "repeat": False})
-    if panel_man.get("repeatTile"):
-        # seamless body tile: repeats to fill the scroll region.
-        backgrounds.append({"file": panel_man["repeatTile"], "cover": False, "repeat": True})
 
     manifest = {
         "name": source.get("name") or "",
@@ -989,39 +1080,53 @@ def build_source_manifest(source):
 
     if mode in ("top-elastic", "overlay"):
         if mode == "top-elastic":
-            elements = _project_top_elastic(layout, profiles)
+            elements = _project_top_elastic(layout, profiles, source, canvas)
         else:
             elements = _project_overlay(layout, canvas, profiles)
+        # Screen placement for an overlay PANEL that declares a baseLayout: mirror
+        # the scene composing base+panel. Shift every candidate down by overlayTop
+        # so it lands at its true screen y; the line sits at the head's bottom edge
+        # and the scroll-bg tucks just above it (see _panel_screen_shift). Without a
+        # baseLayout the pack stays overlay-local (origin at y=0, unchanged).
+        shift = _panel_screen_shift(source, layout, canvas, resource_root, profiles) \
+            if mode == "overlay" else None
+        if shift:
+            for el in elements:
+                if isinstance(el.get("cy"), (int, float)):
+                    el["cy"] = round(el["cy"] + shift["shift"], 6)
         manifest = {
             "name": source.get("name") or meta.get("name") or "",
             "description": source.get("_comment", ""),
             "canvas": canvas,
             "elements": elements,
         }
+        if shift:
+            # Read-only line at the fixed head's bottom edge — "浮层最底下的边缘".
+            manifest["guideLine"] = round(shift["head_cy"], 6)
         safe = meta.get("safeArea")
         if isinstance(safe, dict):
             manifest["safe"] = {"top": safe.get("top", 0), "bottom": safe.get("bottom", 0)}
         bg = meta.get("background")
         if isinstance(bg, dict) and bg.get("tex") in profiles:
             scene, fmt = profiles[bg["tex"]]
-            # top-elastic / overlay pages draw the bg via the game's
-            # fillBackgroundWidth: WIDTH-filled + TOP-anchored + overflow-cropped
-            # (NOT contain-centered). Tell app.js to match that model; the overlay
-            # (loadout-panel grass body) tiles downward like the combine grass
-            # layer, so flag it repeat. (baseline pages like home use a different,
-            # anchorY-centered model — see the flat branch below, left unchanged.)
-            # The bg named here is the SEAM piece (loadout-bg-bottom). When the page
-            # also declares a seamless repeatTile (loadout-grass), the seam piece is
-            # placed ONCE and the tile repeats below it — mirror the game's
-            # buildGrassFloor. Only repeat the bg itself when there's no tile.
-            has_tile = meta.get("repeatTile") in profiles
-            manifest["background"] = {"file": "%s/%s.%s" % (scene, bg["tex"], fmt),
-                                      "cover": bool(bg.get("cover")),
-                                      "fit": "width-top",
-                                      "repeat": mode == "overlay" and not has_tile}
-            if has_tile:
-                t_scene, t_fmt = profiles[meta["repeatTile"]]
-                manifest["repeatTile"] = "%s/%s.%s" % (t_scene, meta["repeatTile"], t_fmt)
+            # The overlay bg is a single pre-stitched long image (loadout-scroll-bg):
+            # WIDTH-filled, TOP-anchored, never repeats. When placed at screen
+            # coords (baseLayout present), its top tucks under the head at
+            # bg_top_cy = (headHeight-tuck)/H; otherwise it fills from y=0.
+            # anchor picks the width-locked crop side: "top" (default) fills from
+            # y=0 and crops off the bottom; "bottom"/"baseline" pins the art to the
+            # screen bottom and crops off the TOP (the game's fillBackgroundWidth
+            # anchor:"baseline" — e.g. endless, where the chick+platform sit at the
+            # bottom and the tall bg overflows upward).
+            anchor = str(bg.get("anchor", "top")).lower()
+            fit = "width-bottom" if anchor in ("bottom", "baseline") else "width-top"
+            layer = {"file": "%s/%s.%s" % (scene, bg["tex"], fmt),
+                     "cover": bool(bg.get("cover")),
+                     "fit": fit,
+                     "repeat": False}
+            if shift:
+                layer["topCy"] = round(shift["bg_top_cy"], 6)
+            manifest["background"] = layer
         if meta.get("showCapsule"):
             manifest["showCapsule"] = True
         return manifest, resource_root
@@ -1087,8 +1192,16 @@ def build_source_manifest(source):
     bg = meta.get("background")
     if isinstance(bg, dict) and bg.get("tex") in profiles:
         scene, fmt = profiles[bg["tex"]]
+        # anchor picks the width-locked crop side: "top" (default) fills from y=0
+        # and crops the bottom; "bottom"/"baseline" pins art to the screen bottom
+        # and crops the TOP (fillBackgroundWidth anchor:"baseline" — e.g. endless,
+        # whose tall bg keeps the chick+platform at the bottom and overflows upward).
+        anchor = str(bg.get("anchor", "top")).lower()
+        fit = "width-bottom" if anchor in ("bottom", "baseline") else "width-top"
         manifest["background"] = {"file": "%s/%s.%s" % (scene, bg["tex"], fmt),
-                                  "cover": bool(bg.get("cover"))}
+                                  "cover": bool(bg.get("cover")),
+                                  "fit": fit,
+                                  "repeat": False}
     # WeChat top-right menu-capsule forbidden zone (review guide).
     if meta.get("showCapsule"):
         manifest["showCapsule"] = True
@@ -1170,6 +1283,19 @@ def write_source_manifest(source, manifest):
         else:
             meta = layout.get("_eyetospec", {}) if isinstance(layout, dict) else {}
             canvas = meta.get("canvas", {"w": 720, "h": 1600})
+            # If the pack rendered at screen coords (baseLayout present), un-shift
+            # every edited cy by the SAME overlayTop before inverting, so panel.json
+            # stays overlay-local (zero drift — exact inverse of the build shift).
+            resource_root = _expand(os.path.join(_expand(source.get("repo", "~")),
+                                                  meta.get("resourceRoot", "")))
+            profiles = _load_asset_profiles(_expand(os.path.join(_expand(source.get("repo", "~")),
+                                                                  meta.get("assetProfiles", "")))) \
+                if meta.get("assetProfiles") else {}
+            shift = _panel_screen_shift(source, layout, canvas, resource_root, profiles)
+            if shift:
+                for el in edited.values():
+                    if isinstance(el.get("cy"), (int, float)):
+                        el["cy"] = round(float(el["cy"]) - shift["shift"], 6)
             _invert_overlay(layout, canvas, edited)
         with open(layout_path, "w", encoding="utf-8") as f:
             json.dump(layout, f, ensure_ascii=False, indent=2)
