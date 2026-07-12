@@ -249,16 +249,84 @@ function str(...vals) {
   return vals[vals.length - 1];
 }
 
+function bgUrl(file) {
+  return `/assets/${encodeURIComponent(PACK_ID)}/${encodeURIComponent(file)}`;
+}
+
 function applyCanvasBackground() {
+  // remove any previously-drawn stacked layers
+  canvasEl.querySelectorAll('.bg-layer').forEach(n => n.remove());
+
+  // Combine view: several stacked layers (hut head then grass body). Each layer
+  // is width-filled and seated at the natural bottom of the previous one (the
+  // real runtime cut line); a layer flagged `repeat` tiles down to fill the rest.
+  // This keeps the true two-plane stacking visible so the owner can judge the
+  // overlay's position against the deploy row — the whole point of combine.
+  const layers = manifest.backgrounds;
+  if (Array.isArray(layers) && layers.filter(l => l && l.file).length) {
+    canvasEl.classList.remove('checker');
+    canvasEl.style.backgroundImage = '';
+    layers.forEach((bg) => {
+      if (!bg || !bg.file) return;
+      const div = document.createElement('div');
+      div.className = 'bg-layer';
+      div.dataset.repeat = bg.repeat ? '1' : '';
+      div.style.backgroundImage = `url("${bgUrl(bg.file)}")`;
+      div.style.backgroundRepeat = bg.repeat ? 'repeat-y' : 'no-repeat';
+      div.style.backgroundPosition = 'top center';
+      div.style.backgroundSize = '100% auto';
+      canvasEl.appendChild(div);
+      // Measure natural aspect so the layer's rendered height (= canvas width ×
+      // natural ratio) can seat the next layer at its true bottom seam.
+      const probe = new Image();
+      probe.onload = () => {
+        if (probe.naturalWidth > 0) {
+          div.dataset.aspect = probe.naturalWidth / probe.naturalHeight;
+          positionBgLayers();
+        }
+      };
+      probe.src = bgUrl(bg.file);
+    });
+    positionBgLayers();
+    return;
+  }
+
   const bg = manifest.background;
   if (bg && bg.file) {
-    canvasEl.style.backgroundImage =
-      `url("/assets/${encodeURIComponent(PACK_ID)}/${encodeURIComponent(bg.file)}")`;
+    canvasEl.style.backgroundImage = `url("${bgUrl(bg.file)}")`;
     canvasEl.style.backgroundSize = bg.cover ? 'cover' : 'contain';
     canvasEl.classList.remove('checker');
   } else {
     canvasEl.classList.add('checker');
   }
+}
+
+// Re-seat stacked .bg-layer divs so each non-repeat layer sits directly below the
+// previous one's rendered (natural-aspect) bottom, and the final/repeat layer
+// fills the remainder down to the canvas bottom. Called after each layer image
+// loads (natural aspect known) and on resize (canvas width changes).
+function positionBgLayers() {
+  const divs = Array.from(canvasEl.querySelectorAll('.bg-layer'));
+  const cw = canvasEl.clientWidth || 720;
+  let top = 0;
+  divs.forEach((div, i) => {
+    div.style.left = '0';
+    div.style.width = '100%';
+    div.style.top = top + 'px';
+    const isLast = i === divs.length - 1;
+    const repeats = div.dataset.repeat === '1';
+    const aspect = parseFloat(div.dataset.aspect);
+    if (repeats || isLast || !Number.isFinite(aspect) || aspect <= 0) {
+      // fill the rest of the canvas
+      div.style.height = 'auto';
+      div.style.bottom = '0';
+    } else {
+      const dispH = cw / aspect; // width-filled → height from natural aspect
+      div.style.bottom = 'auto';
+      div.style.height = dispH + 'px';
+      top += dispH;
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -279,6 +347,7 @@ function layoutStage() {
   sizeSafeBands();
   sizeCapsule();
   sizeAnchorLine();
+  positionBgLayers(); // stacked bg heights are px → recompute on any size change
   // re-place nodes now that px size changed
   for (const el of elements) placeNode(el);
   checkSafeViolations();

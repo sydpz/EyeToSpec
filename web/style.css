@@ -200,6 +200,14 @@ code {
   background-repeat: no-repeat;
   background-position: center;
 }
+/* Combine view: stacked background layers (hut head + grass body). Each is
+ * width-filled and absolutely positioned; JS seats them at their true seam so
+ * the two-plane runtime stacking is visible behind the draggable elements. */
+.bg-layer {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+}
 /* Safe-area overlay (?safe=top:..,bottom:..): a translucent red band over the
  * unsafe top/bottom strips (notch / camera row / home indicator), a dashed line
  * at each safe boundary, and a label. Purely a review aid; drawn above artwork
@@ -329,6 +337,7 @@ code {
   touch-action: none;
   user-select: none;
   border: 1.5px solid transparent;
+  z-index: 1; /* above .bg-layer (z-index:0) in the combine view */
 }
 .el:active { cursor: grabbing; }
 .el img { width: 100%; height: 100%; display: block; pointer-events: none; object-fit: contain; }

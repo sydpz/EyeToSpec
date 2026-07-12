@@ -296,6 +296,27 @@ def _resolve_file(el, tex, profiles):
         el["file"] = "%s/%s.%s" % (scene, tex, fmt)
 
 
+def _project_flat_elements(layout, profiles):
+    """Project a FLAT top-elastic layout (shop/henhouse/challenge) → elements.
+
+    These pages carry literal top-level cx/cy per key (topbar_back, res_*_icon,
+    plank_1…), NOT the loadout's nested topbar/deploy schema. Same math as the
+    generic flat loop in build_source_manifest: pass fields verbatim, resolve tex."""
+    out = []
+    for key, v in layout.items():
+        if key in _LAYOUT_META_KEYS or not isinstance(v, dict):
+            continue
+        if "cx" not in v or "cy" not in v:
+            continue
+        el = {"id": key}
+        for fld in _ELEM_PASS:
+            if fld in v:
+                el[fld] = v[fld]
+        _resolve_file(el, v.get("tex"), profiles)
+        out.append(el)
+    return out
+
+
 def _project_top_elastic(layout, profiles):
     """Project the loadout BASE pack → draggable editor elements.
 
@@ -303,7 +324,12 @@ def _project_top_elastic(layout, profiles):
     deploy.slot.<i>     cx=cx[i-1],      cy=offsetTop,        w=deploy.w   (1-based)
     deploy.<part>       cx=cx[0]+dx,     cy=offsetTop+dy,     w=part.w
 
-    Mirrors resolveLoadoutBaseLayout at editor scale (safeArea.top=0)."""
+    Mirrors resolveLoadoutBaseLayout at editor scale (safeArea.top=0).
+
+    Flat pages (shop/henhouse/challenge) reuse mode "top-elastic" but have NO
+    nested topbar/deploy dicts — fall back to the flat projection for them."""
+    if not isinstance(layout.get("topbar"), dict) and not isinstance(layout.get("deploy"), dict):
+        return _project_flat_elements(layout, profiles)
     out = []
     topbar = layout.get("topbar")
     if isinstance(topbar, dict):
@@ -563,6 +589,161 @@ def _invert_overlay(layout, canvas, edited):
                 tgt["w"] = round(float(el["w"]), 6)
 
 
+# --- combine view (source with a `combine` array) ---------------------------
+# A combine source declares NO coordinates of its own: it references two child
+# layouts (a top-elastic BASE + an overlay PANEL) and serve.py stacks them into
+# ONE full-page canvas at the game's true runtime relationship —
+#   overlayTop = base.deployRowBottom + panel.overlay.gapTop·W
+#   (deployRowBottom = base.deploy.offsetTop·H + base.deploy.w·W/2)
+# — the SAME math as resolveLoadoutBaseLayout/PanelLayout. BASE elements keep
+# their full-page position; PANEL elements shift DOWN by overlayTop. Every id is
+# namespaced ("base::…" / "panel::…") so a drag routes back to the right child
+# json (base → _invert_top_elastic, panel → un-shift then _invert_overlay). The
+# combine view never writes coordinates itself — it only edits through the
+# children, so base/panel/combine never drift.
+_COMBINE_SEP = "::"
+
+
+def _combine_children(source):
+    """Resolve a combine source's child specs → [(role, child_source_dict), …].
+    Each child_source reuses the parent repo unless it carries its own."""
+    repo = source.get("repo", "~")
+    out = []
+    for spec in source.get("combine", []):
+        if not isinstance(spec, dict) or "layout" not in spec:
+            continue
+        out.append((spec.get("role", ""),
+                    {"repo": spec.get("repo", repo), "layout": spec["layout"]}))
+    return out
+
+
+def _combine_overlay_top(base_layout, panel_layout, canvas):
+    """The overlay origin in canvas px, mirroring the game exactly:
+    deployRowBottom = deploy.offsetTop·H + deploy.w·W/2;
+    overlayTop = deployRowBottom + overlay.gapTop·W."""
+    w = _num(canvas.get("w"), 720)
+    h = _num(canvas.get("h"), 1600)
+    dep = base_layout.get("deploy") if isinstance(base_layout.get("deploy"), dict) else {}
+    deploy_row_bottom = _num(dep.get("offsetTop"), 0.0) * h + _num(dep.get("w"), 0.0) * w / 2.0
+    overlay = panel_layout.get("overlay") if isinstance(panel_layout.get("overlay"), dict) else {}
+    return deploy_row_bottom + _num(overlay.get("gapTop"), 0.0) * w
+
+
+def build_combine_manifest(source):
+    """Build a stacked full-page manifest from a combine source. Returns
+    (manifest, resource_root). Child element ids are prefixed role::id; PANEL
+    ys are shifted down by overlayTop/H so the whole page reads as it renders."""
+    children = _combine_children(source)
+    base_c = next((c for r, c in children if r == "base"), None)
+    panel_c = next((c for r, c in children if r == "panel"), None)
+    if base_c is None or panel_c is None:
+        raise FileNotFoundError("combine source needs both a base and a panel child")
+
+    base_man, resource_root = build_source_manifest(base_c)
+    panel_man, _ = build_source_manifest(panel_c)
+
+    # Full-page canvas: use the base child's canvas (topbar+deploy live there and
+    # it's already the full 720×1600 page). PANEL child shares the same H.
+    canvas = base_man.get("canvas", {"w": 720, "h": 1600})
+    h = _num(canvas.get("h"), 1600)
+
+    # Recompute overlayTop from the RAW child layouts (not the manifests) so the
+    # deploy/overlay math is authoritative.
+    base_layout = json.load(open(os.path.join(_expand(base_c["repo"]), base_c["layout"]), encoding="utf-8"))
+    panel_layout = json.load(open(os.path.join(_expand(panel_c["repo"]), panel_c["layout"]), encoding="utf-8"))
+    overlay_top = _combine_overlay_top(base_layout, panel_layout, canvas)
+    shift = (overlay_top / h) if h else 0.0
+
+    elements = []
+    for el in base_man.get("elements", []):
+        e = dict(el)
+        e["id"] = "base" + _COMBINE_SEP + el["id"]
+        elements.append(e)
+    for el in panel_man.get("elements", []):
+        e = dict(el)
+        e["id"] = "panel" + _COMBINE_SEP + el["id"]
+        if isinstance(e.get("cy"), (int, float)):
+            e["cy"] = round(float(e["cy"]) + shift, 6)  # push overlay down under the deploy row
+        elements.append(e)
+
+    # Two-layer background stacked top→bottom: the hut head (base bg) then the
+    # grass body (panel bg), the front-end seats each by natural aspect so grass
+    # sits exactly at the head's rendered cut line (the true runtime seam) and
+    # tiles down (repeat) to fill the rest. Minimal + faithful: no hardcoded art
+    # ratios in serve.py, robust to art-size changes.
+    backgrounds = []
+    if isinstance(base_man.get("background"), dict):
+        backgrounds.append({"file": base_man["background"]["file"], "cover": False, "repeat": False})
+    if isinstance(panel_man.get("background"), dict):
+        backgrounds.append({"file": panel_man["background"]["file"], "cover": False, "repeat": True})
+
+    manifest = {
+        "name": source.get("name") or "",
+        "description": source.get("_comment", ""),
+        "canvas": canvas,
+        "elements": elements,
+        "combine": True,
+    }
+    if backgrounds:
+        manifest["backgrounds"] = backgrounds
+    if isinstance(base_man.get("safe"), dict):
+        manifest["safe"] = base_man["safe"]
+    if base_man.get("showCapsule"):
+        manifest["showCapsule"] = True
+    return manifest, resource_root
+
+
+def write_combine_manifest(source, manifest):
+    """Route an edited combine manifest back into its two child layouts.
+    base:: elements → _invert_top_elastic(base json); panel:: elements → subtract
+    overlayTop (recomputed from the PRE-edit base layout, same value used to build)
+    then _invert_overlay(panel json). Returns (path_summary, added=0)."""
+    children = _combine_children(source)
+    base_c = next((c for r, c in children if r == "base"), None)
+    panel_c = next((c for r, c in children if r == "panel"), None)
+    if base_c is None or panel_c is None:
+        raise FileNotFoundError("combine source needs both a base and a panel child")
+
+    base_path = os.path.join(_expand(base_c["repo"]), base_c["layout"])
+    panel_path = os.path.join(_expand(panel_c["repo"]), panel_c["layout"])
+    base_layout = json.load(open(base_path, encoding="utf-8"))
+    panel_layout = json.load(open(panel_path, encoding="utf-8"))
+
+    meta = base_layout.get("_eyetospec", {}) if isinstance(base_layout, dict) else {}
+    canvas = meta.get("canvas", {"w": 720, "h": 1600})
+    h = _num(canvas.get("h"), 1600)
+    # overlayTop from the PRE-edit layouts == the value the manifest was built with,
+    # so the panel un-shift exactly cancels the build-time shift (zero drift).
+    overlay_top = _combine_overlay_top(base_layout, panel_layout, canvas)
+    shift = (overlay_top / h) if h else 0.0
+
+    edited = {el["id"]: el for el in manifest.get("elements", []) if isinstance(el, dict) and "id" in el}
+    base_edited, panel_edited = {}, {}
+    for eid, el in edited.items():
+        if _COMBINE_SEP not in eid:
+            continue
+        role, child_id = eid.split(_COMBINE_SEP, 1)
+        child_el = dict(el)
+        child_el["id"] = child_id
+        if role == "base":
+            base_edited[child_id] = child_el
+        elif role == "panel":
+            if isinstance(child_el.get("cy"), (int, float)):
+                child_el["cy"] = float(child_el["cy"]) - shift  # back to overlay-local
+            panel_edited[child_id] = child_el
+
+    _invert_top_elastic(base_layout, base_edited)
+    _invert_overlay(panel_layout, canvas, panel_edited)
+
+    with open(base_path, "w", encoding="utf-8") as f:
+        json.dump(base_layout, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    with open(panel_path, "w", encoding="utf-8") as f:
+        json.dump(panel_layout, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    return "%s + %s" % (base_path, panel_path), 0
+
+
 def _expand(path):
     return os.path.abspath(os.path.expanduser(path))
 
@@ -596,6 +777,9 @@ def build_source_manifest(source):
 
     Returns (manifest_dict, resource_root_abspath). Raises FileNotFoundError if
     the layout file is missing."""
+    # Combine source: no layout of its own — stack its child packs instead.
+    if isinstance(source.get("combine"), list) and source["combine"]:
+        return build_combine_manifest(source)
     repo = _expand(source.get("repo", "~"))
     layout_path = os.path.join(repo, source.get("layout", ""))
     with open(layout_path, "r", encoding="utf-8") as f:
@@ -717,6 +901,9 @@ def write_source_manifest(source, manifest):
     never surfaced. This keeps source.json a true live link (edit in the editor →
     the hand-authored config updates in place), so NO pack.json snapshot is made
     and the game + EyeToSpec never drift. Returns the layout path written."""
+    # Combine source: route edited elements back into the two child layouts.
+    if isinstance(source.get("combine"), list) and source["combine"]:
+        return write_combine_manifest(source, manifest)
     repo = _expand(source.get("repo", "~"))
     layout_path = os.path.join(repo, source.get("layout", ""))
     with open(layout_path, "r", encoding="utf-8") as f:
