@@ -317,7 +317,7 @@ def _project_flat_elements(layout, profiles):
     return out
 
 
-def _project_top_elastic(layout, profiles, source=None, canvas=None):
+def _project_top_elastic(layout, profiles):
     """Project the loadout BASE pack → draggable editor elements.
 
     topbar.<name>       cx=cx,           cy=offsetTop,        w=w
@@ -374,49 +374,7 @@ def _project_top_elastic(layout, profiles, source=None, canvas=None):
                     el["w"] = round(dep_w * pscale, 6)  # placeholder display box
                 _resolve_file(el, pv.get("tex") or pv.get("calibTex"), profiles)
                 out.append(el)
-    # Optional read-only reference: a candidate-card frame from the sibling PANEL
-    # layout, drawn at the first deploy slot column so the owner can eyeball the
-    # height gap between an out-deploy slot and a candidate card, and decide
-    # whether to nudge the deploy row up. Declared via `refCardFrame` in the base
-    # source.json (points at the panel layout json). Id prefixed `ref` and marked
-    # readOnly so it never folds back into either config on save.
-    ref = _ref_card_frame(layout, source, canvas, profiles)
-    if ref:
-        out.append(ref)
     return out
-
-
-def _ref_card_frame(base_layout, source, canvas, profiles):
-    """Build a read-only candidate-card frame marker for the base editor, sized
-    and x-placed like the panel's card but y-anchored to the deploy row so the
-    two heights sit side by side. Returns None if not configured/resolvable."""
-    if not isinstance(source, dict):
-        return None
-    panel_rel = source.get("refCardFrame")
-    if not panel_rel:
-        return None
-    repo = _expand(source.get("repo", "~"))
-    try:
-        panel = json.load(open(os.path.join(repo, panel_rel), encoding="utf-8"))
-    except Exception:
-        return None
-    card = panel.get("card")
-    frame = card.get("frame") if isinstance(card, dict) else None
-    if not isinstance(frame, dict):
-        return None
-    dep = base_layout.get("deploy")
-    if not isinstance(dep, dict):
-        return None
-    cx_arr = dep.get("cx")
-    slot_cx = _num(cx_arr[0], 0.5) if isinstance(cx_arr, list) and cx_arr else 0.5
-    el = {"id": "ref" + _ROW_SEP + "cardFrame",
-          "cx": slot_cx,
-          "cy": _num(dep.get("offsetTop"), 0.0),
-          "readOnly": True}
-    if isinstance(frame.get("w"), (int, float)):
-        el["w"] = frame["w"]
-    _resolve_file(el, frame.get("tex"), profiles)
-    return el
 
 
 def _invert_flat_elements(layout, edited):
@@ -1080,7 +1038,7 @@ def build_source_manifest(source):
 
     if mode in ("top-elastic", "overlay"):
         if mode == "top-elastic":
-            elements = _project_top_elastic(layout, profiles, source, canvas)
+            elements = _project_top_elastic(layout, profiles)
         else:
             elements = _project_overlay(layout, canvas, profiles)
         # Screen placement for an overlay PANEL that declares a baseLayout: mirror
