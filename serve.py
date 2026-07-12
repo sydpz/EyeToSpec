@@ -282,7 +282,7 @@ def _num(v, d):
 # inner parts (portrait/remove/plus) are dx/dy offsets from a slot center (dx a
 # fraction of W, dy a fraction of H), SHARED across all slots, so we project them
 # once anchored to slot 1 and re-derive dx/dy from that slot on save.
-_TOP_ELASTIC_TOPBAR = ("back", "board", "title", "egg", "eggNum")
+_TOP_ELASTIC_TOPBAR = ("back", "board", "title", "resHeart", "resStar", "resEgg")
 # (part-key, writes-own-w). portrait carries no w in the schema (it uses
 # portraitScale × the live tower width at runtime); we give it a placeholder
 # display box on projection but never write a w back.
@@ -636,6 +636,113 @@ def _invert_overlay(layout, canvas, edited):
                 tgt["w"] = round(float(el["w"]), 6)
 
 
+# --- dialog projection (mode == "dialog") -----------------------------------
+# The dialog base (ui/layout/base/dialog-layout.ts) is a TWO-LAYER model:
+#   layer 1  `dialog`  = the panel FRAME's occupancy of the phone screen,
+#                        fractions {cx,cy,w,h} of the canvas — dragged onto the
+#                        screen base, then FIXED (铁律 1: never re-flow/stretch).
+#   layer 2  elements  = each element's {cx,cy,w,h} is a fraction of the FRAME,
+#                        not the canvas (铁律 2).
+# EyeToSpec draws everything in ONE canvas-normalized space, so we project the
+# frame-relative elements down to canvas fractions exactly like the game's
+# resolveDialogElement (box.left + cx·box.w), and surface the frame ITSELF as a
+# draggable element so the owner drags the panel onto the screen first, then the
+# content inside it. Save inverts both (see _invert_dialog). Because EyeToSpec's
+# canvas.h == the game's fixed DIALOG_DESIGN_HEIGHT (1560), a canvas-fraction of
+# the frame height equals the game's fixed-height projection — no live re-flow.
+def _project_dialog(layout, profiles):
+    frame = layout.get("dialog") if isinstance(layout.get("dialog"), dict) else {}
+    fcx = _num(frame.get("cx"), 0.5)
+    fcy = _num(frame.get("cy"), 0.5)
+    fw = _num(frame.get("w"), 0.8)
+    fh = _num(frame.get("h"), 0.6)
+    left = fcx - fw / 2.0
+    top = fcy - fh / 2.0
+
+    out = []
+    # The frame itself, draggable on the screen base (layer 1). Its wood-frame art
+    # (tex) contain-fits the frame box, matching the runtime panel.
+    frame_el = {"id": "dialog", "cx": fcx, "cy": fcy, "w": fw, "h": fh}
+    _resolve_file(frame_el, frame.get("tex"), profiles)
+    out.append(frame_el)
+
+    # Each content element: frame-relative fraction → canvas fraction (layer 2).
+    for key, v in layout.items():
+        if key in _LAYOUT_META_KEYS or key == "dialog" or not isinstance(v, dict):
+            continue
+        if "cx" not in v or "cy" not in v:
+            continue
+        ew = _num(v.get("w"), 0.1)
+        eh = _num(v.get("h"), ew)
+        el = {"id": key,
+              "cx": left + _num(v.get("cx"), 0.5) * fw,
+              "cy": top + _num(v.get("cy"), 0.5) * fh,
+              "w": ew * fw,
+              "h": eh * fh}
+        # Text / paint style fields pass through verbatim (already canvas-neutral).
+        for fld in ("anchor", "rotation", "text", "color", "align", "fontSize",
+                    "fontFamily", "fontWeight", "stroke", "strokeWidth", "shadow",
+                    "fill", "alpha", "radius"):
+            if fld in v:
+                el[fld] = v[fld]
+        _resolve_file(el, v.get("tex"), profiles)
+        out.append(el)
+    return out
+
+
+def _invert_dialog(layout, edited):
+    """Fold edited canvas-space elements back into the two-layer dialog schema:
+    the `dialog` element restores the frame {cx,cy,w,h}; every other element's
+    canvas fraction is divided back through the (updated) frame to recover its
+    FRAME-relative {cx,cy,w,h} — the exact inverse of _project_dialog."""
+    # 0. Hard-delete: any frame-relative element key present in the layout but
+    # absent from the edited manifest was soft-deleted in the editor — drop it for
+    # good (mirrors _invert_flat_elements). The `dialog` frame itself is never a
+    # content element, so it's excluded and can't be deleted this way.
+    existing = [k for k, v in layout.items()
+                if k not in _LAYOUT_META_KEYS and k != "dialog" and isinstance(v, dict)
+                and "cx" in v and "cy" in v]
+    for k in existing:
+        if k not in edited:
+            del layout[k]
+
+    # 1. Restore the frame first (later elements invert against the NEW frame).
+    frame = layout.get("dialog") if isinstance(layout.get("dialog"), dict) else None
+    fe = edited.get("dialog")
+    if isinstance(frame, dict) and isinstance(fe, dict):
+        for fld in ("cx", "cy", "w", "h"):
+            if isinstance(fe.get(fld), (int, float)):
+                frame[fld] = round(float(fe[fld]), 6)
+    fcx = _num(frame.get("cx"), 0.5) if isinstance(frame, dict) else 0.5
+    fcy = _num(frame.get("cy"), 0.5) if isinstance(frame, dict) else 0.5
+    fw = _num(frame.get("w"), 0.8) if isinstance(frame, dict) else 0.8
+    fh = _num(frame.get("h"), 0.6) if isinstance(frame, dict) else 0.6
+    left = fcx - fw / 2.0
+    top = fcy - fh / 2.0
+
+    # 2. Each content element: canvas fraction → frame-relative fraction.
+    for key, el in edited.items():
+        if key == "dialog" or key in _LAYOUT_META_KEYS:
+            continue
+        target = layout.get(key)
+        if not isinstance(target, dict):
+            continue
+        if isinstance(el.get("cx"), (int, float)) and fw:
+            target["cx"] = round((float(el["cx"]) - left) / fw, 6)
+        if isinstance(el.get("cy"), (int, float)) and fh:
+            target["cy"] = round((float(el["cy"]) - top) / fh, 6)
+        if isinstance(el.get("w"), (int, float)) and fw:
+            target["w"] = round(float(el["w"]) / fw, 6)
+        if isinstance(el.get("h"), (int, float)) and fh:
+            target["h"] = round(float(el["h"]) / fh, 6)
+        # Style fields written straight back (canvas-neutral).
+        for fld in ("text", "color", "align", "fontSize", "fontFamily",
+                    "fontWeight", "stroke", "strokeWidth", "shadow", "fill",
+                    "alpha", "radius"):
+            if fld in el:
+                target[fld] = el[fld]
+
+
 # --- combine view (source with a `combine` array) ---------------------------
 # A combine source declares NO coordinates of its own: it references two child
 # layouts (a top-elastic BASE + an overlay PANEL) and serve.py stacks them into
@@ -718,11 +825,20 @@ def build_combine_manifest(source):
     # sits exactly at the head's rendered cut line (the true runtime seam) and
     # tiles down (repeat) to fill the rest. Minimal + faithful: no hardcoded art
     # ratios in serve.py, robust to art-size changes.
+    # Mirror the game's buildGrassFloor exactly (3 physical layers, NOT a repeated
+    # bg-bottom): hut head once, then the bg-bottom transition piece (the one with
+    # the wooden beam that meets the head) once, then the SEAMLESS grass tile
+    # (panel _eyetospec.repeatTile → loadout-grass, beamless) repeated downward to
+    # fill. Repeating bg-bottom tiles its beam+fringe mid-page = false seams.
     backgrounds = []
     if isinstance(base_man.get("background"), dict):
         backgrounds.append({"file": base_man["background"]["file"], "cover": False, "repeat": False})
     if isinstance(panel_man.get("background"), dict):
-        backgrounds.append({"file": panel_man["background"]["file"], "cover": False, "repeat": True})
+        # transition piece: placed once, does NOT repeat.
+        backgrounds.append({"file": panel_man["background"]["file"], "cover": False, "repeat": False})
+    if panel_man.get("repeatTile"):
+        # seamless body tile: repeats to fill the scroll region.
+        backgrounds.append({"file": panel_man["repeatTile"], "cover": False, "repeat": True})
 
     manifest = {
         "name": source.get("name") or "",
@@ -730,6 +846,12 @@ def build_combine_manifest(source):
         "canvas": canvas,
         "elements": elements,
         "combine": True,
+        # The overlay-top guide line: a READ-ONLY horizontal marker at the exact
+        # y the game computes for the candidate overlay origin (deployRowBottom +
+        # gapTop·W). Panel elements are already shifted down by this same value,
+        # so the line reads as "candidates lay out below here". Derived, never
+        # dragged — it moves only when the base deploy row / gapTop change.
+        "guideLine": round(shift, 6),
     }
     if backgrounds:
         manifest["backgrounds"] = backgrounds
@@ -847,6 +969,24 @@ def build_source_manifest(source):
     # literal top-level cx/cy, so the flat loop below can't see them. Project them
     # into draggable elements with dedicated helpers whose math mirrors the game's
     # resolveLoadout*Layout exactly.
+    # Dialog pages (mode "dialog", OR any layout carrying a top-level `dialog`
+    # frame): a two-layer model — the frame is a draggable element and the content
+    # elements are frame-relative, projected to canvas space by _project_dialog.
+    if mode == "dialog" or isinstance(layout.get("dialog"), dict):
+        elements = _project_dialog(layout, profiles)
+        manifest = {
+            "name": source.get("name") or meta.get("name") or "",
+            "description": source.get("_comment", ""),
+            "canvas": canvas,
+            "elements": elements,
+        }
+        safe = meta.get("safeArea")
+        if isinstance(safe, dict):
+            manifest["safe"] = {"top": safe.get("top", 0), "bottom": safe.get("bottom", 0)}
+        if meta.get("showCapsule"):
+            manifest["showCapsule"] = True
+        return manifest, resource_root
+
     if mode in ("top-elastic", "overlay"):
         if mode == "top-elastic":
             elements = _project_top_elastic(layout, profiles)
@@ -870,10 +1010,18 @@ def build_source_manifest(source):
             # (loadout-panel grass body) tiles downward like the combine grass
             # layer, so flag it repeat. (baseline pages like home use a different,
             # anchorY-centered model — see the flat branch below, left unchanged.)
+            # The bg named here is the SEAM piece (loadout-bg-bottom). When the page
+            # also declares a seamless repeatTile (loadout-grass), the seam piece is
+            # placed ONCE and the tile repeats below it — mirror the game's
+            # buildGrassFloor. Only repeat the bg itself when there's no tile.
+            has_tile = meta.get("repeatTile") in profiles
             manifest["background"] = {"file": "%s/%s.%s" % (scene, bg["tex"], fmt),
                                       "cover": bool(bg.get("cover")),
                                       "fit": "width-top",
-                                      "repeat": mode == "overlay"}
+                                      "repeat": mode == "overlay" and not has_tile}
+            if has_tile:
+                t_scene, t_fmt = profiles[meta["repeatTile"]]
+                manifest["repeatTile"] = "%s/%s.%s" % (t_scene, meta["repeatTile"], t_fmt)
         if meta.get("showCapsule"):
             manifest["showCapsule"] = True
         return manifest, resource_root
@@ -1005,6 +1153,15 @@ def write_source_manifest(source, manifest):
     _verify_writeback_schema(layout, edited)
 
     mode = layout.get("mode")
+    # Dialog pages: invert the two-layer projection (frame + frame-relative
+    # elements) back into the game schema, preserving tex / _eyetospec / metadata.
+    if mode == "dialog" or isinstance(layout.get("dialog"), dict):
+        _invert_dialog(layout, edited)
+        with open(layout_path, "w", encoding="utf-8") as f:
+            json.dump(layout, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        return layout_path, added
+
     # Loadout two-pack: invert the dedicated projections straight back into the
     # nested schema, preserving tex / _eyetospec / metadata (never a flat write).
     if mode in ("top-elastic", "overlay"):

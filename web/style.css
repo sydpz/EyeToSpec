@@ -322,6 +322,27 @@ code {
   white-space: nowrap;
 }
 
+/* Overlay-top guide line: read-only (no grip, no drag). Amber dashed so it never
+ * reads as the blue draggable baseline. Marks where candidates lay out below. */
+.guide-line {
+  position: absolute;
+  left: 0; right: 0;
+  height: 0;
+  border-top: 2px dashed rgba(255, 176, 32, 0.95);
+  pointer-events: none;
+  z-index: 51;
+}
+.guide-label {
+  position: absolute;
+  top: 3px; right: 6px;
+  font: 600 11px/1.3 system-ui, sans-serif;
+  color: #2e1c04;
+  background: rgba(255, 176, 32, 0.95);
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
 /* HUD elements (anchor:top) get a subtle badge so their identity is visible
  * while positioning. */
 .el.is-hud { outline: 2px dashed rgba(80, 200, 255, 0.7); outline-offset: 1px; }

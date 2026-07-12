@@ -82,6 +82,10 @@ const ZOOM_MIN = 1, ZOOM_MAX = 6, ZOOM_STEP = 1.25;
 // from a saved export or manifest.anchorLine; exported back as anchorLine.cy.
 let anchorCy = null;      // normalized 0..1, or null if this pack has no baseline
 let anchorLineEl = null;  // the DOM line node
+// Overlay-top guide line (read-only, combine view only): normalized 0..1 or null.
+// Server-derived from deployRowBottom + gapTop·W — never dragged, never exported.
+let guideCy = null;
+let guideLineEl = null;
 
 // ---------------------------------------------------------------------------
 // load
@@ -155,10 +159,16 @@ async function init() {
   anchorCy = num(saved.anchorLine?.cy, manifest.anchorLine?.cy,
                  Number.isFinite(baselineParam) ? baselineParam : null);
 
+  // Overlay-top guide line (combine view): a read-only marker the server derives
+  // from the same formula the game uses (deployRowBottom + gapTop·W). Not saved,
+  // not draggable — purely a "candidates lay out below here" reference.
+  guideCy = Number.isFinite(manifest.guideLine) ? manifest.guideLine : null;
+
   applyCanvasBackground();
   drawSafeBands();
   drawCapsule();
   drawAnchorLine();
+  drawGuideLine();
   layoutStage();
   renderElements();
   setupFrameNav();
@@ -370,6 +380,7 @@ function layoutStage() {
   sizeSafeBands();
   sizeCapsule();
   sizeAnchorLine();
+  sizeGuideLine();
   positionBgLayers(); // stacked bg heights are px → recompute on any size change
   // re-place nodes now that px size changed
   for (const el of elements) placeNode(el);
@@ -538,6 +549,28 @@ function sizeAnchorLine() {
   }
 }
 
+// Overlay-top guide line: static, read-only. Same DOM shape as the baseline but
+// no grip and no pointer handlers — it's derived, not tunable. Marks where the
+// candidate overlay begins so owner lays panel elements BELOW it.
+function drawGuideLine() {
+  if (guideCy == null) return;
+  guideLineEl = document.createElement('div');
+  guideLineEl.className = 'guide-line';
+  const label = document.createElement('div');
+  label.className = 'guide-label';
+  guideLineEl.appendChild(label);
+  canvasEl.appendChild(guideLineEl);
+}
+
+function sizeGuideLine() {
+  if (!guideLineEl) return;
+  const { h: CH } = canvasPx();
+  if (!CH) return;
+  guideLineEl.style.top = (guideCy * CH) + 'px';
+  const lbl = guideLineEl.querySelector('.guide-label');
+  if (lbl) lbl.textContent = 'overlay top (candidates below) cy=' + guideCy.toFixed(3);
+}
+
 let anchorDrag = null;
 function onAnchorDown(e) {
   e.preventDefault();
@@ -603,6 +636,12 @@ function renderElements() {
         // paint-order so fill sits above stroke (stroke reads as outline)
         span.style.paintOrder = 'stroke fill';
         span.style.webkitTextStrokeColor = el.stroke;
+      } else {
+        // ZCOOL KuaiLe (the .el-text font) ships a SINGLE weight, so font-weight:700
+        // has no bold face to switch to and the browser won't synth faux-bold —
+        // bold looked identical to normal. Fake it with a thin self-colored stroke
+        // when bold is on and there's no explicit outline. Mirrors game render intent.
+        applyFauxBold(span, el.fontWeight, el.color || '#e8eaed');
       }
       if (el.shadow) span.style.textShadow = el.shadow;
       node.dataset.fontSize = el.fontSize || 16;
@@ -1034,8 +1073,27 @@ function updateInspector() {
     if (on) el.fontWeight = 700; else delete el.fontWeight;
     boldBtn.classList.toggle('on', on);
     const span = nodes.get(el.id)?.querySelector('span');
-    if (span) span.style.fontWeight = on ? '700' : '';
+    if (span) {
+      span.style.fontWeight = on ? '700' : '';
+      // Keep the faux-bold stroke in sync (only when no explicit outline is set).
+      if (!el.stroke) applyFauxBold(span, on ? 700 : undefined, el.color || '#e8eaed');
+    }
   });
+}
+
+// ZCOOL KuaiLe is single-weight, so font-weight alone can't render bold. Simulate
+// bold with a hairline text-stroke in the text's OWN color (thickens each glyph)
+// when weight ≥ 700; clear it otherwise. Skip when the element has a real stroke
+// (that outline owns webkitTextStroke). Keeps the editor's bold preview honest.
+function applyFauxBold(span, fontWeight, color) {
+  const on = Number(fontWeight) >= 700 || fontWeight === 'bold';
+  if (on) {
+    span.style.webkitTextStroke = '0.6px ' + color;
+    span.style.webkitTextStrokeColor = color;
+  } else {
+    span.style.webkitTextStroke = '';
+    span.style.webkitTextStrokeColor = '';
+  }
 }
 
 // Escape a string for safe use inside a double-quoted HTML attribute.
