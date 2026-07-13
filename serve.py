@@ -17,6 +17,7 @@ Everything else (the drag surface, normalization, export) happens in the browser
 """
 
 import argparse
+import collections
 import json
 import os
 import shutil
@@ -121,14 +122,15 @@ def read_group(group_dir):
 # render node the front-end consumes. Position/size/orientation are common and
 # handled separately; these are purely the "what it looks like" fields.
 _DETAIL_FIELDS = {
-    "image": ("tex",),
+    "image": ("tex", "fit"),
     "text": ("text", "fontSize", "fontFamily", "fontWeight", "color", "align",
              "stroke", "strokeWidth", "shadow", "fill", "alpha"),
     "box": ("fill", "alpha", "radius", "stroke", "strokeWidth"),
     "frame": ("aspect",),
 }
 # Common (type-agnostic) geometry/orientation fields copied verbatim.
-_COMMON_FIELDS = ("x", "y", "w", "h", "rotation", "flipH", "flipV", "alpha", "label")
+_COMMON_FIELDS = ("x", "y", "w", "h", "rotation", "flipH", "flipV", "alpha",
+                  "label", "group")
 
 
 def _num(v, d):
@@ -151,6 +153,111 @@ def _resolve_file(el, tex, profiles):
         el["file"] = "%s/%s.%s" % (scene, tex, fmt)
     else:
         el["file"] = tex  # direct filename against the pack's assets/
+
+
+def _file_to_tex(file, profiles):
+    """Reverse of _resolve_file: a resolved "scene/key.fmt" path -> its tex key.
+
+    The editor's working state (and its duplicate `_added` entries) carry the
+    flattened `file`, not the contract `tex`. Write-back must fold them back into
+    a nested `detail.tex`. If no profile maps to this file (hand-authored packs
+    that reference art by direct filename), pass the value through unchanged."""
+    if not file:
+        return file
+    for key, (scene, fmt) in profiles.items():
+        if "%s/%s.%s" % (scene, key, fmt) == file:
+            return key
+    return file
+
+
+# Geometry/orientation keys the editor's diff carries per element (buildOutput).
+_GEO_KEYS = ("x", "y", "w", "h", "rotation", "flipH", "flipV", "depth",
+             "anchor", "label", "group")
+# Identity keys a duplicate (_added) entry can carry, flat. `file` maps back to
+# detail.tex; the rest are text/box detail fields sorted by _DETAIL_FIELDS.
+_TEXTISH = set(_DETAIL_FIELDS["text"]) | set(_DETAIL_FIELDS["box"])
+
+
+def _rebuild_element(entry, profiles):
+    """A flat diff/_added entry {id, file|text|..., x,y,w,h,...} -> a nested
+    contract element {type, depth, x..., detail:{...}}. Inverse of
+    _flatten_element: file->detail.tex, text/box fields->detail."""
+    spec = collections.OrderedDict()
+    if "file" in entry:
+        etype = "image"
+        detail = {"tex": _file_to_tex(entry["file"], profiles)}
+        if "fit" in entry:
+            detail["fit"] = entry["fit"]
+    elif "text" in entry:
+        etype = "text"
+        detail = {f: entry[f] for f in _DETAIL_FIELDS["text"] if f in entry}
+    else:
+        etype = "box"
+        detail = {f: entry[f] for f in _DETAIL_FIELDS["box"] if f in entry}
+    spec["type"] = etype
+    if "depth" in entry:
+        spec["depth"] = entry["depth"]
+    for k in ("x", "y", "w", "h", "rotation", "flipH", "flipV", "anchor",
+              "label", "group"):
+        if k in entry and not (k in ("label", "group") and not entry[k]):
+            spec[k] = entry[k]
+    spec["detail"] = detail
+    return spec
+
+
+def _apply_diff_to_pack(raw, diff, profiles):
+    """Overlay the editor's diff (buildOutput) onto the original nested pack.
+    Only touches elements the diff mentions; every other field is left intact.
+      - geo by id            -> overlay geometry onto existing element
+      - geo with enabled:false -> delete that element (real delete on write-back)
+      - unknown id (non-delete) -> treat as a new element (rebuild from flat)
+      - _added[]             -> rebuild each into elements
+      - elasticZone/anchorLine -> overwrite top-level page property"""
+    elements = raw.get("elements")
+    if not isinstance(elements, dict):
+        elements = collections.OrderedDict()
+        raw["elements"] = elements
+    for key, val in diff.items():
+        if key in ("_added", "elasticZone", "anchorLine"):
+            continue
+        if not isinstance(val, dict):
+            continue
+        if val.get("enabled") is False:
+            elements.pop(key, None)
+            continue
+        if key in elements and isinstance(elements[key], dict):
+            tgt = elements[key]
+            for gk in _GEO_KEYS:
+                if gk not in val:
+                    continue
+                # empty group/label = removed in the editor -> drop the key
+                # rather than persist a dangling "group":"" on the element.
+                if gk in ("group", "label") and not val[gk]:
+                    tgt.pop(gk, None)
+                else:
+                    tgt[gk] = val[gk]
+            # identity fields (text/color/fontSize/... and file->tex) live in
+            # detail, not top-level. Route any the diff carries into detail.
+            det = tgt.get("detail")
+            if not isinstance(det, dict):
+                det = collections.OrderedDict()
+                tgt["detail"] = det
+            for ik, iv in val.items():
+                if ik in _GEO_KEYS or ik == "enabled":
+                    continue
+                if ik == "file":
+                    det["tex"] = _file_to_tex(iv, profiles)
+                elif ik in _TEXTISH or ik in ("tex", "fit"):
+                    det[ik] = iv
+        else:
+            elements[key] = _rebuild_element(dict(val, **{"id": key}), profiles)
+    for entry in diff.get("_added", []) if isinstance(diff.get("_added"), list) else []:
+        if isinstance(entry, dict) and entry.get("id"):
+            elements[entry["id"]] = _rebuild_element(entry, profiles)
+    for pk in ("elasticZone", "anchorLine"):
+        if pk in diff:
+            raw[pk] = diff[pk]
+    return raw
 
 
 def _flatten_element(eid, spec, profiles):
@@ -245,11 +352,22 @@ def build_manifest(pack_dir, raw):
     # stable sort by depth: equal depths keep insertion (dict) order -> deterministic.
     nodes.sort(key=lambda n: n["depth"])
 
+    # background: optional top-level base image (NOT an element). Resolve its tex
+    # to a file the same way elements do, so the front-end can paint it. Absent
+    # background (empty-canvas pages: dialogs/panels) passes through as None.
+    background = raw.get("background")
+    if isinstance(background, dict):
+        background = dict(background)
+        _resolve_file(background, background.get("tex"), profiles)
+        for layer in background.get("layers", []) if isinstance(background.get("layers"), list) else []:
+            if isinstance(layer, dict):
+                _resolve_file(layer, layer.get("tex"), profiles)
+
     return {
         "name": raw.get("name", os.path.basename(pack_dir)),
         "description": raw.get("description", ""),
         "canvas": {"w": cw, "h": ch},
-        "background": raw.get("background"),
+        "background": background,
         "elements": nodes,
         # `env` = device-chrome components (phone frame + safe areas + wx capsule).
         # Declarative: whatever is configured gets drawn, absent → not drawn. Passed
@@ -579,21 +697,47 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": "unknown pack"}, status=404)
             length = int(self.headers.get("Content-Length", 0))
             try:
-                manifest = json.loads(self.rfile.read(length).decode("utf-8"))
+                diff = json.loads(self.rfile.read(length).decode("utf-8"))
             except (ValueError, json.JSONDecodeError):
                 return self.send_json({"error": "invalid json body"}, status=400)
-            if not isinstance(manifest, dict) or "elements" not in manifest:
-                return self.send_json({"error": "not a pack manifest"}, status=400)
-            # NEW CONTRACT: pack.json is a NESTED config (elements object +
-            # type/detail + depth + runtime). The editor sends a FLAT render
-            # manifest (elements array), so folding it back into the nested
-            # source requires a reconstruction pass — not yet implemented in the
-            # absolute-coordinate upgrade. Incremental Save (/api/save, geometry
-            # overlay in output/) is the supported path meanwhile.
-            return self.send_json(
-                {"error": "save-to-pack not yet supported under the new absolute "
-                           "contract; use incremental Save (writes output/)."},
-                status=501)
+            if not isinstance(diff, dict):
+                return self.send_json({"error": "diff must be an object"}, status=400)
+            # Write-back = apply the editor's diff (buildOutput) onto the ORIGINAL
+            # nested pack.json. Read disk as base so every untouched field
+            # (repo/runtime/env/canvas/assetProfiles + unchanged elements) is
+            # preserved verbatim; only diffed elements are changed/deleted/added.
+            pack_path = os.path.join(pack_dir, "pack.json")
+            try:
+                with open(pack_path, "r", encoding="utf-8") as f:
+                    raw = json.load(f, object_pairs_hook=collections.OrderedDict)
+            except (OSError, json.JSONDecodeError) as e:
+                return self.send_json({"error": "cannot read pack.json: %s" % e},
+                                      status=500)
+            # profiles for file->tex reverse lookup on rebuilt elements
+            profiles = {}
+            prof_rel = raw.get("assetProfiles")
+            if isinstance(prof_rel, str):
+                base = raw.get("repo")
+                prof_path = _expand(os.path.join(base, prof_rel)) \
+                    if isinstance(base, str) else os.path.join(pack_dir, prof_rel)
+                profiles = _load_asset_profiles(prof_path)
+            _apply_diff_to_pack(raw, diff, profiles)
+            # atomic write: temp file in the same dir, then rename over pack.json
+            fd, tmp = tempfile.mkstemp(dir=pack_dir, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(raw, f, ensure_ascii=False, indent=2)
+                    f.write("\n")
+                os.replace(tmp, pack_path)
+            except OSError as e:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+                return self.send_json({"error": "write failed: %s" % e}, status=500)
+            # diff is now baked into pack.json; the output/ overlay is redundant.
+            overlay = os.path.join(OUTPUT_DIR, pack_id + ".json")
+            if os.path.isfile(overlay):
+                os.remove(overlay)
+            return self.send_json({"ok": True, "path": os.path.relpath(pack_path, ROOT)})
 
         return self.send_json({"error": "not found"}, status=404)
 

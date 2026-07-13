@@ -161,6 +161,9 @@ async function init() {
       // label: layer tag (single string, e.g. "overlay"/"scroll"). Pure grouping
       // annotation — the runtime maps it to a layer role; EyeToSpec stores + filters.
       label: str(s.label, el.label, ''),
+      // group: binding id (flat, one group per element). output overlay wins over
+      // pack, default ungrouped. Selecting a member selects the whole group.
+      group: str(s.group, el.group, ''),
       // soft-delete: output.enabled overrides pack.enabled, default enabled.
       enabled: bool(saved[el.id]?.enabled, el.enabled, true),
     });
@@ -287,7 +290,9 @@ function applyCanvasBackground() {
   // real runtime cut line); a layer flagged `repeat` tiles down to fill the rest.
   // This keeps the true two-plane stacking visible so the owner can judge the
   // overlay's position against the deploy row — the whole point of combine.
-  const layers = manifest.backgrounds;
+  // Stacked layers live under background.layers (the top-level background field's
+  // optional multi-layer form); legacy manifest.backgrounds kept as a fallback.
+  const layers = (manifest.background && manifest.background.layers) || manifest.backgrounds;
   if (Array.isArray(layers) && layers.filter(l => l && l.file).length) {
     canvasEl.classList.remove('checker');
     canvasEl.style.backgroundImage = '';
@@ -769,6 +774,10 @@ function renderElements() {
       img.src = '/assets/' + encodeURIComponent(PACK_ID) + '/' + encodeURIComponent(el.file);
       img.alt = el.id;
       img.draggable = false;
+      // fit:"cover" = full-bleed background (fills the box, overflow cropped); the
+      // default (contain) keeps foreground art whole. Set inline so it beats the
+      // `.el img { object-fit: contain }` rule.
+      if (el.fit) img.style.objectFit = el.fit;
       img.addEventListener('load', () => {
         // lock aspect for images: derive h from natural ratio if h not set
         if (img.naturalWidth && img.naturalHeight) {
@@ -851,7 +860,10 @@ function placeNode(el) {
   node.style.height = pxH + 'px';
   node.style.left = (el.x * S) + 'px';      // x/y = top-left corner, canvas px
   node.style.top = (el.y * S) + 'px';
-  node.style.zIndex = Number.isFinite(el.depth) ? el.depth : 0;  // paint order
+  // paint order. Floor at 0: a negative z-index would sink the node BEHIND the
+  // canvas's own solid background (hiding e.g. a depth:-1 background element).
+  // DOM order is already depth-sorted, so equal z-index still stacks correctly.
+  node.style.zIndex = Math.max(0, Number.isFinite(el.depth) ? el.depth : 0);
   const tf = [];
   if (el.rotation) tf.push('rotate(' + el.rotation + 'deg)');
   if (el.flipH || el.flipV) tf.push('scale(' + (el.flipH ? -1 : 1) + ',' + (el.flipV ? -1 : 1) + ')');
@@ -875,6 +887,8 @@ function onPointerDown(e, el, node, mode) {
   // Additive click only toggles selection — don't start a drag (which would
   // move a single element and feel wrong mid multi-select).
   if (additive) { select(el.id, true); return; }
+  // Clicking an already-selected element in a multi-selection keeps the whole
+  // set (so you can drag the group); clicking an unselected one selects it alone.
   if (!selectedIds.has(el.id)) select(el.id);
   node.setPointerCapture(e.pointerId);
   const S = dispScale();
@@ -889,6 +903,11 @@ function onPointerDown(e, el, node, mode) {
     centerY: rect.top + rect.height / 2,
     S,
   };
+  // Group move: on a plain move with 2+ selected, drag the whole set together.
+  // Snapshot each member's start corner so the same delta applies to all.
+  if (mode === 'move' && selectedIds.size > 1) {
+    drag.group = selectedElements().map(g => ({ el: g, x: g.x, y: g.y }));
+  }
   if (mode === 'rotate') {
     drag.startAngle = Math.atan2(e.clientY - drag.centerY, e.clientX - drag.centerX) * 180 / Math.PI;
   }
@@ -922,6 +941,12 @@ function onPointerMove(e) {
       if (Math.abs(next - snapped) < 4) next = snapped % 360;
     }
     el.rotation = Math.round(next * 10) / 10;
+  } else if (drag.group) {
+    // move the whole selection by the same delta
+    for (const m of drag.group) { m.el.x = m.x + dx; m.el.y = m.y + dy; }
+    for (const m of drag.group) placeNode(m.el);
+    updateInspector();
+    return;
   } else {
     el.x = drag.startElX + dx;   // top-left corner, canvas px (free to go off-board)
     el.y = drag.startElY + dy;
@@ -940,27 +965,129 @@ function onPointerUp(e) {
 }
 
 // ---------------------------------------------------------------------------
+// marquee (rubber-band) select: drag a rectangle on empty canvas to select every
+// element it touches. Shift/⌘ adds to the current selection; a plain click (no
+// drag) clears it. Coords all in canvas px (top-left origin), like everything else.
+// ---------------------------------------------------------------------------
+let marquee = null;
+
+function elBox(el) {   // element bounding box in canvas px
+  return { x: el.x, y: el.y, w: el.w, h: heightOf(el) };
+}
+
+function boxesIntersect(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x &&
+         a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function wireMarquee() {
+  canvasEl.addEventListener('pointerdown', (e) => {
+    if (e.target !== canvasEl) return;   // only start on empty canvas
+    e.preventDefault();
+    const S = dispScale();
+    const rect = canvasEl.getBoundingClientRect();
+    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+    const box = document.createElement('div');
+    box.className = 'marquee';
+    canvasEl.appendChild(box);
+    marquee = {
+      pointerId: e.pointerId, S, rect, additive, box,
+      x0: (e.clientX - rect.left) / S, y0: (e.clientY - rect.top) / S,
+      base: additive ? new Set(selectedIds) : new Set(),
+      moved: false,
+    };
+    canvasEl.setPointerCapture(e.pointerId);
+    canvasEl.addEventListener('pointermove', onMarqueeMove);
+    canvasEl.addEventListener('pointerup', onMarqueeUp);
+    canvasEl.addEventListener('pointercancel', onMarqueeUp);
+  });
+}
+
+function onMarqueeMove(e) {
+  if (!marquee) return;
+  const m = marquee;
+  const x1 = (e.clientX - m.rect.left) / m.S, y1 = (e.clientY - m.rect.top) / m.S;
+  const bx = Math.min(m.x0, x1), by = Math.min(m.y0, y1);
+  const bw = Math.abs(x1 - m.x0), bh = Math.abs(y1 - m.y0);
+  if (bw > 3 || bh > 3) m.moved = true;
+  const S = m.S;
+  Object.assign(m.box.style, {
+    left: bx * S + 'px', top: by * S + 'px',
+    width: bw * S + 'px', height: bh * S + 'px',
+  });
+  // live selection preview: base set ∪ elements the rect touches
+  const rectBox = { x: bx, y: by, w: bw, h: bh };
+  const next = new Set(m.base);
+  for (const el of elements) {
+    if (el.enabled === false) continue;
+    if (boxesIntersect(elBox(el), rectBox)) next.add(el.id);
+  }
+  selectedIds = expandToGroups(next);   // touching one member grabs the group
+  primaryId = [...selectedIds][selectedIds.size - 1] || null;
+  refreshSelectionUI();
+}
+
+function onMarqueeUp(e) {
+  if (!marquee) return;
+  const m = marquee;
+  canvasEl.removeEventListener('pointermove', onMarqueeMove);
+  canvasEl.removeEventListener('pointerup', onMarqueeUp);
+  canvasEl.removeEventListener('pointercancel', onMarqueeUp);
+  try { canvasEl.releasePointerCapture(m.pointerId); } catch (_) {}
+  m.box.remove();
+  // a plain click (no drag) with no modifier clears the selection
+  if (!m.moved && !m.additive) select(null);
+  marquee = null;
+}
+
+// ---------------------------------------------------------------------------
 // selection, list, inspector
 // ---------------------------------------------------------------------------
 // select(id): id=null clears. With `additive` (Shift/Cmd-click) the element is
 // toggled in/out of the current selection; otherwise it becomes the sole one.
+// Selection is group-aware: touching any grouped element pulls in its whole
+// group (a group behaves as one bound component).
 function select(id, additive) {
   if (id == null) {
     selectedIds.clear();
     primaryId = null;
   } else if (additive) {
-    if (selectedIds.has(id) && selectedIds.size > 1) {
-      selectedIds.delete(id);
-      if (primaryId === id) primaryId = [...selectedIds][selectedIds.size - 1];
+    const fam = groupMembers(id);   // {id} or the whole group
+    const already = fam.every(f => selectedIds.has(f));
+    if (already && selectedIds.size > fam.length) {
+      fam.forEach(f => selectedIds.delete(f));   // toggle the group off
+      if (fam.includes(primaryId)) primaryId = [...selectedIds].pop() || null;
     } else {
-      selectedIds.add(id);
+      fam.forEach(f => selectedIds.add(f));
       primaryId = id;
     }
   } else {
-    selectedIds = new Set([id]);
+    selectedIds = new Set(groupMembers(id));
     primaryId = id;
   }
   refreshSelectionUI();
+}
+
+// The ids that move/select together with `id`: its whole group if grouped,
+// else just itself. Flat groups — no recursion needed.
+function groupMembers(id) {
+  const el = elements.find(e => e.id === id);
+  if (!el || !el.group) return [id];
+  return elements.filter(e => e.group === el.group && e.enabled !== false)
+    .map(e => e.id);
+}
+
+// Expand an id set so that whenever any group member is present, all members
+// are. Used by marquee select (touching one member grabs the whole group).
+function expandToGroups(idSet) {
+  const groups = new Set();
+  for (const e of elements) if (e.group && idSet.has(e.id)) groups.add(e.group);
+  const out = new Set(idSet);
+  for (const e of elements) {
+    if (e.enabled === false) continue;
+    if (e.group && groups.has(e.group)) out.add(e.id);
+  }
+  return out;
 }
 
 // Re-sync highlight / inspector / align bar to the current selection set,
@@ -997,45 +1124,92 @@ function applyToSelection(fn) {
   updateInspector();
 }
 
-// Align edges/centers to the selection's bounding box (Figma-style). All canvas
-// px, top-left origin: x/y are corners, size is w/h.
+// Split the current selection into rigid UNITS: every grouped member collapses
+// into one unit (its combined bounding box), each ungrouped element is its own.
+// Align/distribute act on units and translate a unit as a whole — so a group
+// keeps its internal layout and two groups align by their bounding boxes.
+function selectionUnits() {
+  const sel = selectedElements();
+  const byGroup = new Map();   // group name -> [els]
+  const units = [];
+  for (const el of sel) {
+    if (el.group) {
+      if (!byGroup.has(el.group)) byGroup.set(el.group, []);
+      byGroup.get(el.group).push(el);
+    } else {
+      units.push({ els: [el] });
+    }
+  }
+  for (const els of byGroup.values()) units.push({ els });
+  for (const u of units) {
+    const x = Math.min(...u.els.map(e => e.x));
+    const y = Math.min(...u.els.map(e => e.y));
+    const r = Math.max(...u.els.map(e => e.x + e.w));
+    const b = Math.max(...u.els.map(e => e.y + heightOf(e)));
+    u.x = x; u.y = y; u.w = r - x; u.h = b - y;
+  }
+  return units;
+}
+
+// Move a whole unit by a delta on one axis (keeps its members' relative layout).
+function moveUnit(u, axis, delta) {
+  const k = axis === 'h' ? 'x' : 'y';
+  for (const e of u.els) e[k] += delta;
+  u[k] += delta;
+}
+
+// Apply a unit-level mutation, then re-place every affected element + refresh.
+function applyToUnits(fn) {
+  const units = selectionUnits();
+  if (units.length < 2) return;
+  fn(units);
+  for (const u of units) for (const e of u.els) placeNode(e);
+  updateInspector();
+}
+
+// Align edges/centers to the selection's bounding box (Figma-style), by UNIT:
+// a group moves as one rigid box. All canvas px, top-left origin.
 function alignSelection(edge) {
-  applyToSelection((sel) => {
-    const boxes = sel.map(el => ({ el, w: el.w, h: heightOf(el) }));
-    const left   = Math.min(...boxes.map(b => b.el.x));
-    const right  = Math.max(...boxes.map(b => b.el.x + b.w));
-    const top    = Math.min(...boxes.map(b => b.el.y));
-    const bottom = Math.max(...boxes.map(b => b.el.y + b.h));
-    for (const b of boxes) {
-      if (edge === 'left')    b.el.x = left;
-      if (edge === 'right')   b.el.x = right - b.w;
-      if (edge === 'hcenter') b.el.x = (left + right) / 2 - b.w / 2;
-      if (edge === 'top')     b.el.y = top;
-      if (edge === 'bottom')  b.el.y = bottom - b.h;
-      if (edge === 'vcenter') b.el.y = (top + bottom) / 2 - b.h / 2;
+  applyToUnits((units) => {
+    const left   = Math.min(...units.map(u => u.x));
+    const right  = Math.max(...units.map(u => u.x + u.w));
+    const top    = Math.min(...units.map(u => u.y));
+    const bottom = Math.max(...units.map(u => u.y + u.h));
+    for (const u of units) {
+      if (edge === 'left')    moveUnit(u, 'h', left - u.x);
+      if (edge === 'right')   moveUnit(u, 'h', (right - u.w) - u.x);
+      if (edge === 'hcenter') moveUnit(u, 'h', ((left + right) / 2 - u.w / 2) - u.x);
+      if (edge === 'top')     moveUnit(u, 'v', top - u.y);
+      if (edge === 'bottom')  moveUnit(u, 'v', (bottom - u.h) - u.y);
+      if (edge === 'vcenter') moveUnit(u, 'v', ((top + bottom) / 2 - u.h / 2) - u.y);
     }
   });
 }
 
-// Distribute so element CENTERS are evenly spaced between the two extremes.
+// Distribute so UNIT centers are evenly spaced between the two extremes.
 // (Simple, predictable; edge-gap distribution can come later if needed.)
 function distributeSelection(axis) {
-  applyToSelection((sel) => {
-    if (sel.length < 3) return;   // 2 elements are already "evenly spaced"
-    const posKey = axis === 'h' ? 'x' : 'y';
-    const sizeOf = axis === 'h' ? (el => el.w) : heightOf;
-    const center = el => el[posKey] + sizeOf(el) / 2;
-    const sorted = [...sel].sort((a, b) => center(a) - center(b));
+  applyToUnits((units) => {
+    if (units.length < 3) return;   // 2 units are already "evenly spaced"
+    const sizeK = axis === 'h' ? 'w' : 'h';
+    const posK  = axis === 'h' ? 'x' : 'y';
+    const center = u => u[posK] + u[sizeK] / 2;
+    const sorted = [...units].sort((a, b) => center(a) - center(b));
     const lo = center(sorted[0]), hi = center(sorted[sorted.length - 1]);
     const step = (hi - lo) / (sorted.length - 1);
-    sorted.forEach((el, i) => { el[posKey] = (lo + step * i) - sizeOf(el) / 2; });
+    sorted.forEach((u, i) => moveUnit(u, axis, (lo + step * i) - center(u)));
   });
 }
 
 // Center the whole selection on the canvas (moves as a group, keeps relative
 // layout) on one axis.
+// Center the current selection's bounding box on the canvas. Meaningful for a
+// single element too (unlike align/distribute), so it uses its own apply that
+// allows n>=1 rather than applyToSelection's 2+ guard.
 function centerOnCanvas(axis) {
-  applyToSelection((sel) => {
+  const sel = selectedElements();
+  if (!sel.length) return;
+  {
     const posKey = axis === 'h' ? 'x' : 'y';
     const sizeOf = axis === 'h' ? (el => el.w) : heightOf;
     const canvasSize = axis === 'h'
@@ -1045,7 +1219,9 @@ function centerOnCanvas(axis) {
     const hi = Math.max(...sel.map(el => el[posKey] + sizeOf(el)));
     const delta = canvasSize / 2 - (lo + hi) / 2;
     for (const el of sel) el[posKey] += delta;
-  });
+  }
+  for (const el of sel) placeNode(el);
+  updateInspector();
 }
 
 // Show the align bar only when 2+ elements are selected.
@@ -1057,7 +1233,16 @@ function updateAlignBar() {
   const count = document.getElementById('align-count');
   if (count) count.textContent = n + ' selected';
   const distBtns = bar.querySelectorAll('[data-distribute]');
-  distBtns.forEach(b => b.disabled = n < 3);
+  const units = selectionUnits();
+  distBtns.forEach(b => b.disabled = units.length < 3);
+  // align/center act on units; disable when there's nothing to align (a single
+  // unit — e.g. one group selected whole — can't align against anything).
+  bar.querySelectorAll('[data-align]').forEach(b => b.disabled = units.length < 2);
+  // Group needs 2+ selected; Ungroup needs at least one grouped element.
+  const grp = bar.querySelector('[data-group]');
+  const ungrp = bar.querySelector('[data-ungroup]');
+  if (grp) grp.disabled = n < 2;
+  if (ungrp) ungrp.disabled = !selectedElements().some(e => e.group);
 }
 
 function wireAlignBar() {
@@ -1069,6 +1254,42 @@ function wireAlignBar() {
     b.addEventListener('click', () => distributeSelection(b.dataset.distribute)));
   bar.querySelectorAll('[data-center]').forEach(b =>
     b.addEventListener('click', () => centerOnCanvas(b.dataset.center)));
+  const grp = bar.querySelector('[data-group]');
+  const ungrp = bar.querySelector('[data-ungroup]');
+  if (grp) grp.addEventListener('click', groupSelection);
+  if (ungrp) ungrp.addEventListener('click', ungroupSelection);
+}
+
+// ---------------------------------------------------------------------------
+// group / ungroup: bind the current selection into one flat group (persisted
+// per-element via the `group` field), or clear the binding.
+// ---------------------------------------------------------------------------
+function uniqueGroup() {
+  const taken = new Set(elements.map(e => e.group).filter(Boolean));
+  let n = 1;
+  while (taken.has('group-' + n)) n++;
+  return 'group-' + n;
+}
+
+function groupSelection() {
+  const sel = selectedElements();
+  if (sel.length < 2) return;
+  const name = uniqueGroup();
+  for (const el of sel) el.group = name;   // flat: overrides any prior group
+  renderList();
+  refreshSelectionUI();
+  toast('Grouped ' + sel.length + ' elements → ' + name);
+}
+
+function ungroupSelection() {
+  const sel = selectedElements();
+  const groups = new Set(sel.map(e => e.group).filter(Boolean));
+  if (!groups.size) return;
+  // ungroup every member of any touched group, not just the selected subset
+  for (const el of elements) if (groups.has(el.group)) el.group = '';
+  renderList();
+  refreshSelectionUI();
+  toast('Ungrouped');
 }
 
 // ---------------------------------------------------------------------------
@@ -1139,6 +1360,7 @@ function renderList() {
     if (disabled) li.classList.add('is-disabled');
     li.innerHTML = `<span class="el-name"></span>` +
       (el._added ? '<span class="el-tag">copy</span>' : '') +
+      (el.group ? `<span class="el-tag el-group-tag">${escAttr(el.group)}</span>` : '') +
       (el.label ? `<span class="el-tag el-label-tag">${el.label}</span>` : '') +
       `<span class="el-kind">${kind}</span>` +
       `<button class="el-toggle" title="${disabled ? 'Restore' : 'Delete'}">${disabled ? '↺' : '🗑'}</button>`;
@@ -1167,6 +1389,13 @@ function updateInspector() {
       <label>h<input data-k="h" type="number" step="1" value="${Math.round(h)}"></label>
       <label>rotation°<input data-k="rotation" type="number" step="1" value="${(el.rotation || 0).toFixed(1)}"></label>
       <label>depth<input data-k="depth" type="number" step="1" value="${Number.isFinite(el.depth) ? el.depth : 0}"></label>
+    </div>
+    <div class="insp-center">
+      <span class="insp-center-label">Center on canvas</span>
+      <div class="insp-center-row">
+        <button class="btn btn-ghost" data-center="h" title="Center horizontally on canvas">H</button>
+        <button class="btn btn-ghost" data-center="v" title="Center vertically on canvas">V</button>
+      </div>
     </div>
     ${typeof el.text === 'string' ? `
     <div class="insp-text">
@@ -1212,6 +1441,8 @@ function updateInspector() {
     renderList();
     renderElements();   // label may drop el out of / into the active filter
   });
+  inspectorEl.querySelectorAll('[data-center]').forEach(btn =>
+    btn.addEventListener('click', () => centerOnCanvas(btn.dataset.center)));
   inspectorEl.querySelector('#dup-btn').addEventListener('click', () => duplicateElement(el.id));
   inspectorEl.querySelector('#del-btn').addEventListener('click', () => setEnabled(el.id, false));
   inspectorEl.querySelectorAll('.anchor-btn').forEach(btn => {
@@ -1340,6 +1571,11 @@ const IDENTITY_KEYS = ['file', 'text', 'color', 'align', 'fontSize', 'fontFamily
 function buildOutput() {
   const out = {};
   const added = [];
+  // Original identity values by id (from the loaded manifest), so edits to an
+  // EXISTING element's text/color/size/... can be diffed and written back too —
+  // geometry alone isn't enough once the inspector can change content.
+  const origById = {};
+  for (const e of (manifest.elements || [])) origById[e.id] = e;
   for (const el of elements) {
     let h = el.h;
     if (h == null) h = heightOf(el);   // measured, in canvas px
@@ -1357,8 +1593,20 @@ function buildOutput() {
       // duplicate: store full definition (identity + geometry) in _added
       const def = { id: el.id };
       for (const k of IDENTITY_KEYS) if (el[k] !== undefined) def[k] = el[k];
+      if (el.group) def.group = el.group;
       added.push(Object.assign(def, geo));
     } else {
+      // existing element: also emit identity fields that changed vs the loaded
+      // manifest (text edits, recolor, resize font, …), so write-back folds them
+      // into detail. Unchanged fields stay out of the diff (geometry-only edits
+      // keep round-tripping untouched).
+      const orig = origById[el.id] || {};
+      for (const k of IDENTITY_KEYS) {
+        if (el[k] !== undefined && el[k] !== orig[k]) geo[k] = el[k];
+      }
+      // group binding: emit when changed (empty string flags a removal so
+      // write-back drops the field). Top-level, not detail (serve _GEO_KEYS).
+      if ((el.group || '') !== (orig.group || '')) geo.group = el.group || '';
       out[el.id] = geo;
     }
   }
@@ -1380,41 +1628,9 @@ function buildOutput() {
 function round(n) { return Math.round(n); }          // canvas px → integer
 function round3(n) { return Math.round(n * 1000) / 1000; }  // fractions (anchor line)
 
-// Build a fresh pack.json from the current working state (for write-back Save).
-// Disabled elements are dropped (real delete); duplicates become first-class
-// pack elements; geometry is folded in so output/ can be cleared afterwards.
-function buildPackManifest() {
-  const out = Object.assign({}, manifest);   // preserve name/description/canvas/…
-  out.elements = [];
-  for (const el of elements) {
-    if (el.enabled === false) continue;       // real delete on write-back
-    let h = el.h;
-    if (h == null) h = heightOf(el);   // measured, canvas px
-    // start from the element's own persisted fields, minus editor-internal ones
-    const def = {};
-    for (const k of Object.keys(el)) {
-      if (k === 'enabled' || k === '_added' || k.startsWith('_')) continue;
-      def[k] = el[k];
-    }
-    def.x = round(el.x); def.y = round(el.y); def.w = round(el.w);
-    if (h != null) def.h = round(h); else delete def.h;
-    delete def.cx; delete def.cy;   // legacy center-origin fields, never re-emit
-    if (el.rotation) def.rotation = Math.round(el.rotation * 10) / 10; else delete def.rotation;
-    def.flipH = el.flipH || undefined;
-    def.flipV = el.flipV || undefined;
-    if (def.flipH === undefined) delete def.flipH;
-    if (def.flipV === undefined) delete def.flipV;
-    if (el.anchor && el.anchor !== 'baseline') def.anchor = el.anchor; else delete def.anchor;
-    if (el.label) def.label = el.label; else delete def.label;   // drop empty tag
-    out.elements.push(def);
-  }
-  // fold the baseline/elastic-zone into the manifest too
-  if (anchorCy != null) {
-    if (LINE_KIND === 'divider') out.elasticZone = { topCy: round(anchorCy), minH: round(ELASTIC_MIN_H) };
-    else out.anchorLine = { cx: 0.5, cy: round(anchorCy), w: 1, h: 0.04 };
-  }
-  return out;
-}
+// Write-back Save posts buildOutput()'s diff; the server folds it onto the
+// original nested pack.json (see serve.py _apply_diff_to_pack). No client-side
+// manifest reconstruction — that path lost top-level fields.
 
 function wireToolbar() {
   document.getElementById('save-btn').addEventListener('click', save);
@@ -1436,7 +1652,7 @@ function wireToolbar() {
     const text = document.getElementById('json-out').textContent;
     navigator.clipboard?.writeText(text).then(() => toast('Copied to clipboard'));
   });
-  canvasEl.addEventListener('pointerdown', (e) => { if (e.target === canvasEl) select(null); });
+  wireMarquee();
 
   // Zoom controls: buttons, keyboard (+ / - / 0), and Ctrl/Cmd + wheel.
   document.getElementById('zoom-in-btn').addEventListener('click', () => setZoom(zoom * ZOOM_STEP));
@@ -1477,7 +1693,7 @@ async function save() {
     const res = await fetch('/api/writepack/' + encodeURIComponent(PACK_ID), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildPackManifest()),
+      body: JSON.stringify(buildOutput()),
     }).then(r => r.json());
     if (res.ok) {
       toast('Written → ' + res.path + ' · reloading…');

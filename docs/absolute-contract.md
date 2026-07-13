@@ -60,13 +60,14 @@ flat global paint order — no separate layer/z split.
 
 | Block | EyeToSpec | Runtime (game) |
 |-------|-----------|----------------|
+| `background` | renders (bottom-most fill) | reads (width-lock + anchor) |
 | `elements` | renders (depth-sorted) | reads + places |
 | `env`      | renders (device chrome) | **ignores** |
 | `runtime`  | **ignores** | reads (adaptation, anchors, fit mode) |
 
-`elements` is the shared truth. `env` is EyeToSpec-only scaffolding. `runtime` is
-game-only behavior. Each side skips the block that isn't theirs, so the three
-never collide.
+`background` + `elements` are the shared truth. `env` is EyeToSpec-only
+scaffolding. `runtime` is game-only behavior. Each side skips the block that
+isn't theirs, so they never collide.
 
 ## File shape
 
@@ -75,6 +76,7 @@ never collide.
   "name": "Loadout (live · absolute px)",
   "description": "…",
   "canvas": { "width": 720, "height": 2200 },
+  "background": { "tex": "home-bg", "fit": "width-bottom" },
 
   "assetProfiles": "apps/web-client/asset-profiles.json",
   "repo": "/abs/path/to/game-repo",
@@ -110,6 +112,31 @@ its own small board. EyeToSpec never invents this number; it renders whatever th
 file says and scales the whole board to fit the browser window (display-only —
 the stored numbers stay in canvas px).
 
+### `background`
+
+**Optional** top-level field: the page's base image, drawn first (below every
+element). It is *not* an entry in `elements` — it's promoted to its own field
+because it's a special class of art with its own placement rules.
+
+```json
+"background": { "tex": "home-bg", "fit": "width-bottom" }
+```
+
+| Field | Meaning |
+|-------|---------|
+| `tex` | texture key (resolved via `assetProfiles`, like an image element) or a direct filename |
+| `fit` | how it fills: `width-top` \| `width-bottom` (width-locked, anchored, overflow shows) · `contain` \| `cover` (whole-board) |
+| `layers` | optional array of `{ tex, repeat }` for stacked backgrounds (hut head over grass body) |
+
+Omit `background` entirely for an **empty-canvas page** (dialogs, panels) — the
+board renders blank.
+
+EyeToSpec just paints it filling the board (bottom-most). The load-bearing
+semantics — **width-locked to screen width, anchored top/bottom/center, and drawn
+whole so top/bottom overflow stays visible (never cropped)** — belong to the
+**runtime**; EyeToSpec doesn't compute them, and neither does the file's `canvas`.
+`canvas` and `background` are declared independently: neither defines the other.
+
 ### `elements`
 
 A **keyed object** (not an array) — the key is the element id, and key insertion
@@ -126,6 +153,7 @@ Every element:
 | `rotation` | degrees clockwise (optional; spins around center) |
 | `flipH` / `flipV` | mirror (optional) |
 | `label` | layer tag (optional, single string). A grouping annotation — e.g. `"overlay"` vs `"scroll"` — that marks which layer an element belongs to when several are composited onto one board. EyeToSpec only stores it and lets you filter the canvas by it; the **runtime** maps a label to a layer role (fixed vs scrollable). Absent = untagged. |
+| `group` | group binding (optional, single string). Flat — an element belongs to at most one group, groups do not nest. In EyeToSpec, selecting any member selects the whole group, and alignment treats a group as one rigid unit (its combined bounding box). The **runtime** uses it to scale by the group's composed structure rather than per-element. Absent = ungrouped. |
 | `detail` | type-specific payload (below) |
 
 **`detail` by type**
