@@ -218,7 +218,7 @@ def _apply_diff_to_pack(raw, diff, profiles):
         elements = collections.OrderedDict()
         raw["elements"] = elements
     for key, val in diff.items():
-        if key in ("_added", "elasticZone", "anchorLine"):
+        if key in ("_added", "elasticZone", "anchorLine", "env"):
             continue
         if not isinstance(val, dict):
             continue
@@ -232,7 +232,7 @@ def _apply_diff_to_pack(raw, diff, profiles):
                     continue
                 # empty group/label = removed in the editor -> drop the key
                 # rather than persist a dangling "group":"" on the element.
-                if gk in ("group", "label") and not val[gk]:
+                if gk in ("group", "label", "anchor") and not val[gk]:
                     tgt.pop(gk, None)
                 else:
                     tgt[gk] = val[gk]
@@ -257,6 +257,31 @@ def _apply_diff_to_pack(raw, diff, profiles):
     for pk in ("elasticZone", "anchorLine"):
         if pk in diff:
             raw[pk] = diff[pk]
+    # env: device-chrome. Merge only the sub-keys the diff carries (frame geo +
+    # align, safe-band heights); leave wxCapsule and any name/aux fields intact.
+    env_diff = diff.get("env")
+    if isinstance(env_diff, dict):
+        env = raw.get("env")
+        if not isinstance(env, dict):
+            env = collections.OrderedDict()
+            raw["env"] = env
+        fdiff = env_diff.get("frame")
+        if isinstance(fdiff, dict):
+            frame = env.get("frame")
+            if not isinstance(frame, dict):
+                frame = collections.OrderedDict()
+                env["frame"] = frame
+            for fk in ("x", "y", "w", "h", "align"):
+                if fk in fdiff:
+                    frame[fk] = fdiff[fk]
+        for band in ("safeTop", "safeBottom"):
+            bdiff = env_diff.get(band)
+            if isinstance(bdiff, dict) and "h" in bdiff:
+                b = env.get(band)
+                if not isinstance(b, dict):
+                    b = collections.OrderedDict()
+                    env[band] = b
+                b["h"] = bdiff["h"]
     return raw
 
 
