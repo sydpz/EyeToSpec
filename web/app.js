@@ -91,6 +91,7 @@ const ZOOM_MIN = 1, ZOOM_MAX = 6, ZOOM_STEP = 1.25;
 // from a saved export or manifest.anchorLine; exported back as anchorLine.cy.
 let anchorCy = null;      // normalized 0..1, or null if this pack has no baseline
 let anchorLineEl = null;  // the DOM line node
+let frameState = null;    // editable phone-frame state {x,y,w,h,align}, or null if pack has none
 // Overlay-top guide line (read-only, combine view only): normalized 0..1 or null.
 // Server-derived from deployRowBottom + gapTop·W — never dragged, never exported.
 let guideCy = null;
@@ -179,6 +180,18 @@ async function init() {
   // from the same formula the game uses (deployRowBottom + gapTop·W). Not saved,
   // not draggable — purely a "candidates lay out below here" reference.
   guideCy = Number.isFinite(manifest.guideLine) ? manifest.guideLine : null;
+
+  // Phone-frame working state (editable). null when the pack has no env.frame.
+  // align is the source of truth; y is the baked px result of that rule.
+  const _f = manifest.env && manifest.env.frame;
+  frameState = _f ? {
+    x: num(_f.x, null, 0),
+    w: num(_f.w, null, 720),
+    h: num(_f.h, null, (manifest.canvas && manifest.canvas.h) || 1280),
+    align: _f.align || 'top',
+    y: num(_f.y, null, 0),
+  } : null;
+  if (frameState) recomputeFrameY();   // bake y from align on load
 
   applyCanvasBackground();
   drawEnv();          // device-chrome (phone frame + safe areas + wx capsule)
@@ -505,12 +518,11 @@ function frameYForAlign(align, frameH, canvasH) {
   }
 }
 
-// The frame's on-screen rect. env.frame is canvas px, top-left origin
-// (x/y/w/h); multiply by display scale to get screen px.
+// The frame's on-screen rect. Reads the editable frameState (canvas px,
+// top-left origin x/y/w/h); multiply by display scale to get screen px.
 function envFrameRect() {
-  const env = manifest && manifest.env;
-  if (!env || !env.frame) return null;
-  const f = env.frame;
+  const f = frameState;
+  if (!f) return null;
   const S = dispScale();
   return {
     left: num(f.x, null, 0) * S,
@@ -519,6 +531,14 @@ function envFrameRect() {
     h:    num(f.h, null, 1280) * S,
     S,
   };
+}
+
+// Recompute frame.y from its align rule + current h/canvas, then reposition.
+function recomputeFrameY() {
+  if (!frameState) return;
+  const canvasH = (manifest.canvas && manifest.canvas.h) || 1280;
+  frameState.y = Math.round(frameYForAlign(frameState.align, frameState.h, canvasH));
+  if (typeof sizeEnv === 'function') sizeEnv();
 }
 
 // Create the env nodes once (idempotent per load). Only for what's configured.
