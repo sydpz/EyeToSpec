@@ -60,7 +60,7 @@ flat global paint order — no separate layer/z split.
 
 | Block | EyeToSpec | Runtime (game) |
 |-------|-----------|----------------|
-| `background` | renders (bottom-most fill) | reads (width-lock + anchor) |
+| `background` | renders (bottom-most, by px box) | reads + places (px → screen) |
 | `elements` | renders (depth-sorted) | reads + places |
 | `env`      | renders (device chrome) | **ignores** |
 | `runtime`  | **ignores** | reads (adaptation, anchors, fit mode) |
@@ -118,24 +118,43 @@ the stored numbers stay in canvas px).
 element). It is *not* an entry in `elements` — it's promoted to its own field
 because it's a special class of art with its own placement rules.
 
+**Preferred — pure coordinates**, placed exactly like an element (px + top-left):
+
+```json
+"background": { "tex": "home-bg", "x": 0, "y": 0, "w": 720, "h": 2200 }
+```
+
+| Field | Meaning |
+|-------|---------|
+| `tex` | texture key (resolved via `assetProfiles`, like an image element) or a direct filename |
+| `x`, `y` | **top-left** corner in canvas px |
+| `w`, `h` | size in canvas px — the image fills that box (`backgroundSize: 100% 100%`) |
+
+Give `x/y/w/h` and the image paints there, scaling with zoom/resize like every
+element. A tall background (`h` > canvas height) simply **overflows the scroll
+canvas downward** — which is exactly what a long strip wants, with **no `fit`
+semantics needed**. This is the "everything is placed by px" rule applied to the
+background too.
+
+Omit `background` entirely for an **empty-canvas page** (dialogs, panels) — the
+board renders blank.
+
+**Legacy — `fit` mode strings** (kept only as a fallback for old packs; do not
+use in new packs):
+
 ```json
 "background": { "tex": "home-bg", "fit": "width-bottom" }
 ```
 
 | Field | Meaning |
 |-------|---------|
-| `tex` | texture key (resolved via `assetProfiles`, like an image element) or a direct filename |
 | `fit` | how it fills: `width-top` \| `width-bottom` (width-locked, anchored, overflow shows) · `contain` \| `cover` (whole-board) |
 | `layers` | optional array of `{ tex, repeat }` for stacked backgrounds (hut head over grass body) |
 
-Omit `background` entirely for an **empty-canvas page** (dialogs, panels) — the
-board renders blank.
-
-EyeToSpec just paints it filling the board (bottom-most). The load-bearing
-semantics — **width-locked to screen width, anchored top/bottom/center, and drawn
-whole so top/bottom overflow stays visible (never cropped)** — belong to the
-**runtime**; EyeToSpec doesn't compute them, and neither does the file's `canvas`.
-`canvas` and `background` are declared independently: neither defines the other.
+These mode strings pre-date the pure-coordinate form: the background used to
+*guess* how to fill (contain / cover / width-lock + anchor) instead of being told
+a box. New packs place the background by coordinates; `env`/`canvas` are declared
+independently and neither defines the other.
 
 ### `elements`
 
