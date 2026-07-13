@@ -310,7 +310,32 @@ function applyCanvasBackground() {
   const bg = manifest.background;
   if (bg && bg.file) {
     canvasEl.classList.remove('checker');
-    if (bg.fit === 'width-top' || bg.fit === 'width-bottom') {
+    // Absolute-coordinate form (preferred): background is placed exactly like an
+    // element — px + top-left origin. x/y/w/h are canvas px; the image fills that
+    // box (scaled by S like every element). No fit/anchor/topCy guessing: the
+    // owner gives the coords and it paints there. A tall image (h > canvas) just
+    // overflows the scroll canvas downward, which is the whole point.
+    const hasBox = Number.isFinite(bg.x) && Number.isFinite(bg.y)
+      && Number.isFinite(bg.w) && Number.isFinite(bg.h);
+    if (hasBox) {
+      // Placed as % of the canvas box → auto-scales with zoom/resize (the .bg-layer
+      // is a child of the px-sized, scaled canvasEl), so no re-seat pass needed.
+      const CW = (manifest.canvas && manifest.canvas.w) || 720;
+      const CH = (manifest.canvas && manifest.canvas.h) || 1600;
+      canvasEl.style.backgroundImage = '';
+      const div = document.createElement('div');
+      div.className = 'bg-layer';
+      div.style.backgroundImage = `url("${bgUrl(bg.file)}")`;
+      div.style.backgroundRepeat = 'no-repeat';
+      div.style.backgroundPosition = 'top left';
+      div.style.backgroundSize = '100% 100%';
+      div.style.left = (bg.x / CW * 100) + '%';
+      div.style.top = (bg.y / CH * 100) + '%';
+      div.style.width = (bg.w / CW * 100) + '%';
+      div.style.height = (bg.h / CH * 100) + '%';
+      div.dataset.boxBg = '1';
+      canvasEl.appendChild(div);
+    } else if (bg.fit === 'width-top' || bg.fit === 'width-bottom') {
       // The game draws this bg via fillBackgroundWidth: WIDTH-filled (100%) +
       // anchored + overflow-cropped (never contain-centered). Render a single
       // .bg-layer to match — same model as the combine stacked layers — so the
@@ -375,6 +400,9 @@ function positionBgLayers() {
     // Bottom-anchored layers (width-bottom) are pinned via top:0/bottom:0 +
     // background-position:bottom; the stacking pass doesn't apply to them.
     if (div.dataset.bottomAnchored === '1') return;
+    // Box-placed bg (absolute px form) is positioned by its own x/y/w/h; the
+    // stacking pass never touches it — applyCanvasBackground re-seats it on resize.
+    if (div.dataset.boxBg === '1') return;
     const tcy = parseFloat(div.dataset.topCy);
     if (i === 0 && Number.isFinite(tcy)) top = tcy * ch;
     div.style.left = '0';
