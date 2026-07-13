@@ -207,6 +207,7 @@ async function init() {
   window.addEventListener('resize', layoutStage);
   wireToolbar();
   wireAlignBar();
+  renderFramePanel();
 
   // Delete / Backspace soft-deletes the selection (ignored while typing coords).
   window.addEventListener('keydown', (e) => {
@@ -1292,6 +1293,81 @@ function updateAlignBar() {
     b.disabled = n < 1;
     b.classList.toggle('on', b.dataset.anchorAll === shared);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Phone frame panel: always-on sidebar editor for env.frame (w/h/x/align +
+// safe bands). frame is a single global object — no canvas select/drag.
+// ---------------------------------------------------------------------------
+let frameDirty = false;   // frame panel touched -> buildOutput emits env
+
+const FRAME_ALIGNS = ['top', 'bottom', 'center', 'baseline'];
+
+function renderFramePanel() {
+  const panel = document.getElementById('frame-panel');
+  if (!panel) return;
+  if (!frameState) {
+    panel.innerHTML =
+      '<div class="frame-empty">No phone frame on this pack.</div>' +
+      '<button id="frame-add" class="btn btn-ghost">+ Add phone frame</button>';
+    panel.querySelector('#frame-add').addEventListener('click', addFrame);
+    return;
+  }
+  const f = frameState;
+  const st = (manifest.env && manifest.env.safeTop && manifest.env.safeTop.h) || 0;
+  const sb = (manifest.env && manifest.env.safeBottom && manifest.env.safeBottom.h) || 0;
+  panel.innerHTML =
+    '<div class="frame-row"><label>w</label><input data-fk="w" type="number" value="' + f.w + '"></div>' +
+    '<div class="frame-row"><label>h</label><input data-fk="h" type="number" value="' + f.h + '"></div>' +
+    '<div class="frame-row"><label>x</label><input data-fk="x" type="number" value="' + f.x + '"></div>' +
+    '<div class="frame-row"><label>align</label><div class="frame-aligns">' +
+      FRAME_ALIGNS.map(a =>
+        '<button class="align-opt' + (f.align === a ? ' on' : '') + '" data-align-opt="' + a + '">' + a + '</button>'
+      ).join('') +
+    '</div></div>' +
+    '<div class="frame-row"><label>y (derived)</label><span class="frame-y">' + f.y + ' px</span></div>' +
+    '<div class="frame-row"><label>safe top</label><input data-sk="safeTop" type="number" value="' + st + '"></div>' +
+    '<div class="frame-row"><label>safe bottom</label><input data-sk="safeBottom" type="number" value="' + sb + '"></div>' +
+    '<button id="frame-remove" class="btn btn-ghost">Remove frame</button>';
+
+  panel.querySelectorAll('[data-fk]').forEach(inp =>
+    inp.addEventListener('change', () => {
+      const k = inp.dataset.fk, v = parseFloat(inp.value);
+      if (Number.isFinite(v)) { frameState[k] = v; frameDirty = true; recomputeFrameY(); renderFramePanel(); }
+    }));
+  panel.querySelectorAll('[data-align-opt]').forEach(btn =>
+    btn.addEventListener('click', () => {
+      frameState.align = btn.dataset.alignOpt; frameDirty = true; recomputeFrameY(); renderFramePanel();
+    }));
+  panel.querySelectorAll('[data-sk]').forEach(inp =>
+    inp.addEventListener('change', () => {
+      const band = inp.dataset.sk, v = parseFloat(inp.value);
+      if (!Number.isFinite(v)) return;
+      if (!manifest.env) manifest.env = {};
+      if (!manifest.env[band]) manifest.env[band] = {};
+      manifest.env[band].h = v; frameDirty = true;
+      drawSafeBands(); sizeEnv();
+    }));
+  const rm = panel.querySelector('#frame-remove');
+  if (rm) rm.addEventListener('click', removeFrame);
+}
+
+function addFrame() {
+  const canvasH = (manifest.canvas && manifest.canvas.h) || 1280;
+  const canvasW = (manifest.canvas && manifest.canvas.w) || 720;
+  frameState = { x: 0, w: canvasW, h: canvasH, align: 'top', y: 0 };
+  frameDirty = true;
+  if (!manifest.env) manifest.env = {};
+  manifest.env.frame = { x: 0, y: 0, w: canvasW, h: canvasH, align: 'top' };
+  drawEnv(); recomputeFrameY(); renderFramePanel();
+}
+
+function removeFrame() {
+  frameState = null;
+  frameDirty = true;
+  if (manifest.env) delete manifest.env.frame;
+  if (envFrameEl) { envFrameEl.remove(); envFrameEl = null; }
+  sizeEnv(); renderFramePanel();
 }
 
 function wireAlignBar() {

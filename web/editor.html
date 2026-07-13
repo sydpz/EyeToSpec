@@ -53,6 +53,10 @@
         </select>
         <ul id="element-list" class="element-list"></ul>
       </div>
+      <div class="sidebar-section frame-section">
+        <h2>Phone frame</h2>
+        <div id="frame-panel" class="frame-panel"></div>
+      </div>
       <div id="align-bar" class="sidebar-section align-bar" hidden>
         <h2>Align <span id="align-count" class="align-count"></span></h2>
         <div class="align-hint">Shift/⌘-click to add elements.</div>
@@ -86,6 +90,15 @@
           <div class="align-row">
             <button class="btn btn-ghost" data-group title="Bind selection into one group (2+)">⧉ Group</button>
             <button class="btn btn-ghost" data-ungroup title="Remove group binding">⤫ Ungroup</button>
+          </div>
+        </div>
+        <div class="align-group">
+          <span class="align-label">Anchor (whole selection)</span>
+          <div class="align-row">
+            <button class="btn btn-ghost anchor-btn" data-anchor-all="baseline" title="Pin to background baseline (moves with art)">baseline</button>
+            <button class="btn btn-ghost anchor-btn" data-anchor-all="top" title="Pin to screen top / safe area — each element's y is its offset below the top">top</button>
+            <button class="btn btn-ghost anchor-btn" data-anchor-all="center" title="Pin to screen center">center</button>
+            <button class="btn btn-ghost anchor-btn" data-anchor-all="bottom" title="Pin to screen bottom / safe area">bottom</button>
           </div>
         </div>
       </div>

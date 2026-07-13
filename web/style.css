@@ -788,3 +788,13 @@ body.render-mode .stage-wrap { padding: 0; background: #fff; }
    clean preview; keep text/image elements as-is. */
 body.render-mode .el-box { background: transparent !important; border-color: transparent !important; }
 body.render-mode .el-box-label { opacity: 0.25; }
+
+.frame-panel { display: flex; flex-direction: column; gap: 6px; }
+.frame-row { display: flex; align-items: center; gap: 8px; }
+.frame-row label { width: 92px; font-size: 12px; opacity: .8; }
+.frame-row input { width: 80px; }
+.frame-aligns { display: flex; gap: 4px; flex-wrap: wrap; }
+.align-opt { padding: 2px 8px; font-size: 12px; border: 1px solid #555; background: transparent; color: inherit; border-radius: 4px; cursor: pointer; }
+.align-opt.on { background: #e0a94f; color: #222; border-color: #e0a94f; }
+.frame-y { font-size: 12px; opacity: .7; }
+.frame-empty { font-size: 12px; opacity: .6; margin-bottom: 6px; }
