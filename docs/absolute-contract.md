@@ -146,7 +146,7 @@ Every element:
 
 | Field | Meaning |
 |-------|---------|
-| `type` | `image` \| `text` \| `box` \| `frame` |
+| `type` | `image` \| `text` \| `box` \| `frame` \| `line` |
 | `depth` | integer paint order (low = underneath) |
 | `x`, `y` | **top-left** corner in canvas px |
 | `w`, `h` | size in canvas px (`h` optional for images — natural aspect locks it) |
@@ -165,6 +165,13 @@ Every element:
 - `box` — `{ "fill", "alpha", "radius", "stroke", "strokeWidth" }` for
   code-drawn plates.
 - `frame` — `{ }`; but prefer declaring the phone frame under `env`, not here.
+- `line` — `{ }` (no detail). A horizontal baseline / divider. Structurally a
+  thin box — `x/y/w/h` in px, by convention `x=0`, `w=`canvas width, `h=`line
+  thickness (e.g. `4`); only `y` is semantically meaningful. EyeToSpec just
+  stores its position. **What the line _means_** (scroll-zone top, background
+  alignment, …) is decided **downstream** by the conversion library + business
+  layer, keyed off the element's id (e.g. `anchor-line`) — the config carries no
+  such semantics.
 
 ### `env` — device chrome
 

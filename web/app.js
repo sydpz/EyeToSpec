@@ -30,22 +30,6 @@ let SAFE = parseSafe(qs.get('safe'));
 // ?capsule=1 forces it on; else the manifest's showCapsule (from _eyetospec) seeds
 // it once the pack loads. `let` so the manifest can turn it on.
 let CAPSULE = qs.get('capsule') === '1';
-// Baseline line semantics (?line=..): the draggable horizontal line means two
-// different things depending on the page, and must export different fields:
-//   bgAnchor (default) — foreground art pins to background art (battle fence↔barn,
-//              home hen↔nest). Exports anchorLine.cy.
-//   divider  — top of the elastic content zone (henhouse / shop). Below it,
-//              content uses min-height + scroll / stretch. Exports
-//              elasticZone.{topCy, minH}.
-// The two are NOT interchangeable; the implementer reads a different field.
-const LINE_KIND = qs.get('line') === 'divider' ? 'divider' : 'bgAnchor';
-// For divider lines: the elastic zone's min-height (fraction of screen height).
-// Below minH the zone scrolls; above it, items spread. ?minH=0.5 default 0.5.
-const ELASTIC_MIN_H = (() => {
-  const n = parseFloat(qs.get('minH'));
-  return Number.isFinite(n) ? n : 0.5;
-})();
-
 function parseSafe(raw) {
   if (!raw) return null;
   const out = { top: 0, bottom: 0 };
@@ -86,11 +70,6 @@ let labelFilter = '';
 let canvasAspect = 1;     // w / h of the pack canvas
 let zoom = 1;             // 1 = fit-to-viewport; >1 = magnified (stage-wrap scrolls)
 const ZOOM_MIN = 1, ZOOM_MAX = 6, ZOOM_STEP = 1.25;
-// Baseline (anchorLine): one draggable horizontal line per pack marking the
-// "reference object" row (barn's lower edge / candidate-deploy divider). Seeded
-// from a saved export or manifest.anchorLine; exported back as anchorLine.cy.
-let anchorCy = null;      // normalized 0..1, or null if this pack has no baseline
-let anchorLineEl = null;  // the DOM line node
 let frameState = null;    // editable phone-frame state {x,y,w,h,align}, or null if pack has none
 // Overlay-top guide line (read-only, combine view only): normalized 0..1 or null.
 // Server-derived from deployRowBottom + gapTop·W — never dragged, never exported.
@@ -170,12 +149,6 @@ async function init() {
     });
   });
 
-  // Baseline seed: saved export wins, else manifest.anchorLine, else ?baseline=<cy>
-  // (lets a pack with no baseline yet start one, e.g. ?baseline=0.5), else none.
-  const baselineParam = parseFloat(qs.get('baseline'));
-  anchorCy = num(saved.anchorLine?.cy, manifest.anchorLine?.cy,
-                 Number.isFinite(baselineParam) ? baselineParam : null);
-
   // Overlay-top guide line (combine view): a read-only marker the server derives
   // from the same formula the game uses (deployRowBottom + gapTop·W). Not saved,
   // not draggable — purely a "candidates lay out below here" reference.
@@ -197,7 +170,6 @@ async function init() {
   drawEnv();          // device-chrome (phone frame + safe areas + wx capsule)
   drawSafeBands();
   drawCapsule();
-  drawAnchorLine();
   drawGuideLine();
   layoutStage();
   renderElements();
@@ -442,7 +414,6 @@ function layoutStage() {
   sizeEnv();
   sizeSafeBands();
   sizeCapsule();
-  sizeAnchorLine();
   sizeGuideLine();
   positionBgLayers(); // stacked bg heights are px → recompute on any size change
   // re-place nodes now that px size changed
@@ -497,14 +468,14 @@ let envSafeTopEl = null;
 let envSafeBotEl = null;
 let envCapsuleEl = null;
 
-// Read the anchor line's canvas-px position, tolerant of both the legacy
-// normalized cy (0..1) and a future px y. Live drag state (anchorCy) wins.
+// Read the baseline's canvas-px y: it's a plain `type:"line"` element now.
+// Prefer the conventional key `anchor-line`; else the first line element. The
+// canvasH arg is unused (px contract) but kept for call-site symmetry.
 function anchorLineY(canvasH) {
-  if (Number.isFinite(anchorCy)) return anchorCy * canvasH;   // live/seed fraction
-  const a = manifest && manifest.anchorLine;
-  if (a && Number.isFinite(a.y))  return a.y;                 // future: px
-  if (a && Number.isFinite(a.cy)) return a.cy * canvasH;      // legacy: fraction
-  return null;
+  const lines = elements.filter(el => el.type === 'line' && el.enabled !== false);
+  if (!lines.length) return null;
+  const el = lines.find(l => l.id === 'anchor-line') || lines[0];
+  return Number.isFinite(el.y) ? el.y : null;
 }
 
 // Derive the frame's top-edge y (px) from its align rule. baseline pins the
@@ -721,36 +692,6 @@ function overlapsCapsule(el, node) {
   return !(r < f.left || l > f.right || b < f.top || t > f.bottom);
 }
 
-// ---------------------------------------------------------------------------
-// baseline / anchor line (draggable; exported as anchorLine.cy)
-// ---------------------------------------------------------------------------
-function drawAnchorLine() {
-  if (anchorCy == null) return;
-  anchorLineEl = document.createElement('div');
-  anchorLineEl.className = 'anchor-line';
-  const label = document.createElement('div');
-  label.className = 'anchor-label';
-  label.textContent = 'baseline';
-  const grip = document.createElement('div');
-  grip.className = 'anchor-grip';
-  anchorLineEl.appendChild(label);
-  anchorLineEl.appendChild(grip);
-  canvasEl.appendChild(anchorLineEl);
-  anchorLineEl.addEventListener('pointerdown', onAnchorDown);
-}
-
-function sizeAnchorLine() {
-  if (!anchorLineEl) return;
-  const { h: CH } = canvasPx();
-  if (!CH) return;
-  anchorLineEl.style.top = (anchorCy * CH) + 'px';
-  const lbl = anchorLineEl.querySelector('.anchor-label');
-  if (lbl) {
-    lbl.textContent = (LINE_KIND === 'divider' ? 'elastic-zone top cy=' : 'bg-anchor cy=')
-      + anchorCy.toFixed(3);
-  }
-}
-
 // Overlay-top guide line: static, read-only. Same DOM shape as the baseline but
 // no grip and no pointer handlers — it's derived, not tunable. Marks where the
 // candidate overlay begins so owner lays panel elements BELOW it.
@@ -773,31 +714,6 @@ function sizeGuideLine() {
   if (lbl) lbl.textContent = 'overlay top (candidates below) cy=' + guideCy.toFixed(3);
 }
 
-let anchorDrag = null;
-function onAnchorDown(e) {
-  e.preventDefault();
-  e.stopPropagation();
-  anchorLineEl.setPointerCapture(e.pointerId);
-  anchorDrag = { pointerId: e.pointerId, startY: e.clientY, startCy: anchorCy, CH: canvasPx().h };
-  anchorLineEl.addEventListener('pointermove', onAnchorMove);
-  anchorLineEl.addEventListener('pointerup', onAnchorUp);
-  anchorLineEl.addEventListener('pointercancel', onAnchorUp);
-}
-function onAnchorMove(e) {
-  if (!anchorDrag) return;
-  const dy = (e.clientY - anchorDrag.startY) / anchorDrag.CH;
-  anchorCy = clamp(anchorDrag.startCy + dy, 0, 1);
-  sizeAnchorLine();
-}
-function onAnchorUp(e) {
-  if (!anchorDrag) return;
-  anchorLineEl.removeEventListener('pointermove', onAnchorMove);
-  anchorLineEl.removeEventListener('pointerup', onAnchorUp);
-  anchorLineEl.removeEventListener('pointercancel', onAnchorUp);
-  try { anchorLineEl.releasePointerCapture(anchorDrag.pointerId); } catch (e) {}
-  anchorDrag = null;
-}
-
 // ---------------------------------------------------------------------------
 // render elements
 // ---------------------------------------------------------------------------
@@ -812,7 +728,11 @@ function renderElements() {
     if (el.anchor === 'top') node.classList.add('is-hud');
     node.dataset.id = el.id;
 
-    if (el.file) {
+    if (el.type === 'line') {
+      // A baseline/divider element. Structurally a thin box (x/y/w/h px);
+      // rendered as a horizontal line. Generic drag/resize/inspector apply.
+      node.classList.add('el-line');
+    } else if (el.file) {
       const img = document.createElement('img');
       img.src = '/assets/' + encodeURIComponent(PACK_ID) + '/' + encodeURIComponent(el.file);
       img.alt = el.id;
@@ -1760,17 +1680,6 @@ function buildOutput() {
     }
   }
   if (added.length) out._added = added;
-  // The horizontal line is a page property (top level), and exports a DIFFERENT
-  // field per its kind (§ LINE_KIND):
-  //   bgAnchor → anchorLine.cy    (foreground pins to background art)
-  //   divider  → elasticZone.{topCy, minH}  (top of the scroll/stretch zone)
-  if (anchorCy != null) {
-    if (LINE_KIND === 'divider') {
-      out.elasticZone = { topCy: round3(anchorCy), minH: round3(ELASTIC_MIN_H) };
-    } else {
-      out.anchorLine = { cx: 0.5, cy: round3(anchorCy), w: 1, h: 0.04 };
-    }
-  }
   // env.frame + safe bands: only when the frame panel was touched this session.
   if (frameDirty) {
     const env = {};

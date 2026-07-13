@@ -462,6 +462,9 @@ code {
   border: 1.5px dashed rgba(91, 140, 255, 0.7);
   display: flex; align-items: center; justify-content: center;
 }
+.el-line {
+  background: #4a9eff;
+}
 .el-box-label {
   font-size: 0.72rem;
   color: #cdd7ff;

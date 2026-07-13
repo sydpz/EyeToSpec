@@ -127,6 +127,7 @@ _DETAIL_FIELDS = {
              "stroke", "strokeWidth", "shadow", "fill", "alpha"),
     "box": ("fill", "alpha", "radius", "stroke", "strokeWidth"),
     "frame": ("aspect",),
+    "line": (),
 }
 # Common (type-agnostic) geometry/orientation fields copied verbatim.
 _COMMON_FIELDS = ("x", "y", "w", "h", "rotation", "flipH", "flipV", "alpha",

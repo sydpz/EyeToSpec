@@ -1,33 +1,39 @@
-# anchorLine 降格为普通 line 元素 — 设计 spec
+# anchorLine 收敛为普通 line 元素 — 设计 spec
 
 日期: 2026-07-13
 状态: 待 review
 
-## 1. 背景与问题
+## 0. 出发点:三层架构中的定位
 
-EyeToSpec 现在有一条可拖动的水平"基准线"(baseline / divider),它**不是**普通元素,而是一套特殊机制:
+本 spec 只做**最上层(Config)**,不碰下游。整条链路:
 
-- 顶层字段导出:`anchorLine.cy`(0–1 fraction)或 `elasticZone.topCy`(0–1),由 URL 参数 `?line=divider|bgAnchor`(`LINE_KIND`)切换。
-- 独立的全局状态 `anchorCy`、独立渲染 `drawAnchorLine()`、独立拖拽 `onAnchorDown/Move/Up`。
-- 值是 **0–1 归一化**,违反项目铁律"config/EyeToSpec 这层一律 px + 左上角"。
+1. **Config(EyeToSpec 产出)** —— 纯粹、干净的坐标契约。px + 左上角,一切皆元素。只如实描述"设计稿上有什么、在哪",**不含业务语义、不含运行时换算**。EyeToSpec 是产出并编辑这层 config 的工具。
+2. **公共转换库(将来开发)** —— 吃 config,吐业务要的数据结构。所有归一化 / px→fraction / 屏幕适配 / "把 line 元素解释成滚动区顶边"之类语义都收敛在这层。
+3. **业务层(游戏页面)** —— 拿转换库的结构构建页面,不直接碰 config、不自己换算。
 
-**owner 的设计取向(本 spec 的依据):**
+**本 spec 的唯一任务**:把 config 里"基准线"这个东西设计干净 + 让 EyeToSpec 支持它。**不用考虑历史包袱** —— 游戏端现在怎么读 `elasticZone.topCy`、旧页面怎么存 0–1、单测断言什么,都是待重构的下游,不是本 spec 要迁就或保护的对象。它们将来通过转换库适配新契约。
 
-> 这条基准线就是 `elements` 里的一个普通元素,自然有自己的 px 坐标。它为什么需要、代表什么,是**游戏业务自己决定**的 —— EyeToSpec 只管让它被拖到对的位置、存下 px 坐标。游戏运行时按**约定的元素 key** 找到它,读 px,自己换算、自己决定语义。EyeToSpec 不需要懂 elasticZone / topCy / LINE_KIND 这些业务概念。
+## 1. 问题
 
-## 2. 目标契约
+EyeToSpec 现在的"基准线"不是元素,而是一套凌驾于契约之上的特殊机制:
 
-### 2.1 基准线 = 普通 line 元素
+- 顶层导出 `anchorLine.cy`(0–1)或 `elasticZone.topCy`(0–1),由 URL `?line=divider|bgAnchor`(`LINE_KIND`)切换。
+- 独立全局态 `anchorCy`、独立渲染 `drawAnchorLine()`、独立拖拽 `onAnchorDown/Move/Up`。
+- 值是 0–1 归一化,违反"config 一律 px + 左上角";且承载了 `topCy`/`elasticZone` 这类**业务语义**,超出 config 层职责。
+
+这是历史遗留:让工具背了本属于转换库/业务层的知识。
+
+## 2. 目标契约:基准线 = 普通 line 元素
 
 ```jsonc
 {
   "elements": {
-    "anchor-line": {           // key 即标识:游戏按约定 key 认出它
+    "anchor-line": {          // key 即标识:下游按约定 key 认出它
       "type": "line",
       "x": 0,
-      "y": 763,                // px, 左上角原点 —— 这就是原来的 cy×canvasH
+      "y": 763,               // px, 左上角原点 —— 竖直位置
       "w": 720,
-      "h": 4,
+      "h": 4,                 // 线宽(渲染成细高矩形)
       "depth": 99,
       "detail": {}
     }
@@ -35,76 +41,52 @@ EyeToSpec 现在有一条可拖动的水平"基准线"(baseline / divider),它**
 }
 ```
 
-- **key 即 name**:不新增任何标识字段。游戏运行时约定读某个 key(如 `anchor-line`)。owner 定案:"元素的 key 就是标识"。
-- **type: "line"**:新增元素类型。一条 line 语义上只有 `y` 有意义,但**结构上复用通用 `x/y/w/h`**(x=0, w=画布宽, h=线宽如 4),这样 serve flatten / `_GEO_KEYS` / `_apply_diff_to_pack` / app.js 渲染全部零特例 —— line 就是一个扁平的 box。渲染成一条横线(细高矩形)。
-- **px + 左上角**:`y` 就是线的竖直位置,cy 遗留彻底消失。
+- **key 即标识**:不新增任何 name 字段。下游约定读某个 key(如 `anchor-line`)。owner 定案:"元素的 key 就是标识"。
+- **type: "line"**:新增元素类型。语义上一条水平线只有 `y` 有意义,但**结构上复用通用 `x/y/w/h`**(x=0, w=画布宽, h=线宽),使 serve flatten / `_GEO_KEYS` / `_apply_diff_to_pack` / app.js 渲染全部零特例 —— line 就是一个扁平 box,渲染成横线。
+- **px + 左上角**:`y` 即位置,cy 遗留消失。
+- **命名预留**:type 用 `"line"`(泛指线/矩形线)。未来若要竖线,另起 type(如 `"vline"`),不与本类型抢名。type 归 type(line)、key 归 key(anchor-line),各司其职。
 
-> 命名预留:type 用 `"line"`(通用水平/矩形线)。若未来要竖线,另起 `type`(如 `"vline"`),不与本类型抢名。owner 讨论中提到过 `anchor-line` 作 type,但结论是 **type 归 type(line)、key 归 key(anchor-line)** 各司其职,不重复。
+**顶层 `anchorLine` / `elasticZone` 从 EyeToSpec 彻底消失。** 这两个概念不再属于 config 层。
 
-### 2.2 顶层 anchorLine / elasticZone 字段废除(EyeToSpec 侧)
+## 3. EyeToSpec 改动
 
-EyeToSpec 不再导出 `anchorLine` / `elasticZone`。这两个概念从工具消失。
+### 3.1 serve.py:注册 line 类型
 
-## 3. 职责边界
+- `_DETAIL_FIELDS`(:124)加 `"line": ()`(无 detail 字段,纯几何)。
+- 其余 flatten/rebuild/writeback 走通用路径,无需特例(line 的 x/y/w/h 已在 `_COMMON_FIELDS` / `_GEO_KEYS`)。
 
-| 关注点 | 归属 |
-|---|---|
-| 线画在哪(px 坐标) | EyeToSpec(拖动 line 元素) |
-| 线代表什么(滚动区顶边?背景对齐?) | 游戏业务 |
-| topCy(divider 位置)| 由 line 元素的 `y ÷ canvasH` 换算,游戏 reader 做 |
-| minGap / maxGap(弹性拉伸行为)| **纯游戏业务**,EyeToSpec 从不碰,游戏自己在 layout json 里 author |
+### 3.2 app.js:line 元素渲染 + 清掉旧机制
 
-关键区分:`elasticZone` 现在包含 `{ topCy, minGap, maxGap }`。其中 **只有 topCy 是"线的位置"**(EyeToSpec 能给);`minGap`/`maxGap` 是拉伸行为参数,游戏自己写。所以迁移后:游戏从 line 元素算出 topCy,`minGap`/`maxGap` 继续留在 layout json 顶层由游戏 author。
+**新增 line 渲染**(`renderElements` :856 的 else 分支旁,加 `type==='line'` 前置分支):一条横线 div(用背景色 + 高度=h)。inspector 正常显示 x/y/w/h,走通用拖拽/resize。
 
-## 4. 游戏运行时 reader 改动(absolute-td 仓)
-
-`apps/web-client/src/ui/layout/base/page-layout.ts` 的 `resolveElasticZone`:
-
-- **现状**:读 `raw.elasticZone.topCy`(0–1)。
-- **改为**:先在 `raw.elements` 里按约定 key(`anchor-line`)找 line 元素;若找到,`topCy = element.y / canvasH`;`minGap`/`maxGap` 仍读 `raw.elasticZone`(或新位置)。若没找到,回退 `fallback.topCy`。
-- `bgAnchor` 模式(`anchorLine.cy`)同理:游戏若有消费点,改从 line 元素 key 读 px→fraction。
-
-> ⚠️ 这一步跨仓,且触碰 shop / challenge / henhouse / battle-field 四个**冻结的 ground-truth** 布局 json + 相关单测(断言 `typeof elasticZone.topCy === "number"`)。
-
-## 5. 迁移
-
-现存 0–1 值 → line 元素(px):
-
-| 页面 | 现值 | 迁移 |
-|---|---|---|
-| shop | `elasticZone.topCy: 0.164` | + `elements.anchor-line{type:line, y: round(0.164×canvasH)}`,删 topCy |
-| challenge | `topCy: 0.45`(fallback) | 同上 |
-| henhouse | 有 topCy | 同上 |
-| battle-field | 有 anchorLine/elasticZone | 同上 |
-| (EyeToSpec) loadout / td-home pack | 有 anchorLine | 同上 |
-
-`minGap`/`maxGap` 保留在原处不动。
-
-## 6. EyeToSpec 代码清理(app.js)
-
-删除整套 anchorLine 特殊机制,基准线走普通元素路径:
-
+**删除整套 anchorLine 特殊机制**:
 - 删 `LINE_KIND`(:41)、`ELASTIC_MIN_H`(:44)、`anchorCy`(:92)、`anchorLineEl`(:93)。
-- 删 `drawAnchorLine`(:727)、`onAnchorDown/Move/Up`(:777-)、seed 里的 `anchorCy = ...`(:176)。
+- 删 `drawAnchorLine`(:727)、`onAnchorDown/Move/Up`(:777-800)、seed 里 `anchorCy = ...`(:176)、init 里 `drawAnchorLine()`(:200)。
 - 删 `buildOutput` 的 `anchorLine`/`elasticZone` 导出段(:1767-1772)。
-- `anchorLineY(canvasH)`(Task-2 frame 加的兼容函数,:501):改为在 elements 里找约定 key 的 line 元素读 `y`(px);保留函数名给 frame 的 baseline 用 —— **frame baseline 对齐自动受益**,读的就是 line 元素的 px y。
-- 新增 `type:"line"` 的渲染:一条横线(细高矩形 div)。inspector 正常显示 x/y/w/h;拖拽走通用元素拖拽(可只锁竖直,渲染细节)。
-- `guideCy`(:97,只读 overlay 参考线)本 spec **不动**(它是 serve 派生的只读线,非用户拖拽的基准线),留作后续。
+- CSS `.anchor-line` / `.anchor-label` / `.anchor-grip` 清理(可留,无害)。
 
-## 7. 验证
+**改 `anchorLineY(canvasH)`**(frame Task-2 加的兼容函数,:501):改为在 `elements` 里找 `type==='line'` 的元素(优先约定 key `anchor-line`),返回其 `y`(px)。**frame 的 baseline 对齐自动受益** —— 读的就是 line 元素的 px y,不再依赖 anchorCy。
+
+### 3.3 guideLine 不动
+
+`guideCy`(:97)是 serve 派生的只读 overlay 参考线(非用户拖拽的基准线),本 spec **不碰**,留作后续。
+
+## 4. 契约文档
+
+`docs/absolute-contract.md` 元素类型区补 `line`:
+- `type: "line"` = 水平基准线/分隔线;`x/y/w/h` px(x=0、w=画布宽、h=线宽为惯例);无 detail 字段。
+- 用途注记:EyeToSpec 只存位置;线代表什么(滚动区顶边 / 背景对齐 / …)由**转换库 + 业务层**按约定 key 决定,config 不含该语义。
+
+## 5. 验证
 
 - `python3 -c "import ast;ast.parse(open('serve.py').read())"` + `node --check web/app.js`。
-- EyeToSpec:开一个带 line 元素的 pack,line 渲染成横线、能拖、inspector 显示 px y;Save → pack.json 的 `elements.anchor-line.y` 是 px,无顶层 `anchorLine`/`elasticZone`。
-- 游戏端:`resolveElasticZone` 从 line 元素算 topCy,单测改断言;shop/henhouse 等页面滚动区顶边位置与迁移前一致(px÷canvasH ≈ 原 topCy)。
-- frame baseline:选 baseline → frame 顶边贴 line 元素的 y。
+- serve roundtrip:构造带 `type:"line"` 元素的 pack → flatten → 前端节点含 x/y/w/h;写回 diff 改 line 的 y → 顶层 y 更新、detail 不污染。
+- EyeToSpec 手验:开一个含 line 元素的 pack → 渲染成横线、能拖(y 变)、inspector 显示 px y;Save → `elements.<key>.y` 是 px;pack.json 无顶层 `anchorLine`/`elasticZone`。
+- frame baseline:pack 有 line 元素时,frame 面板选 baseline → frame 顶边贴该 line 的 y。
 
-## 8. 风险与分期
+## 6. Out-of-scope(下游 / 将来)
 
-- **跨两仓 + 碰冻结页**:这是本 spec 最大风险。建议实现时先在 EyeToSpec 侧完成(line 类型 + 迁移工具),再改游戏端 reader,最后一次性迁 4 个 json + 改单测,每步独立可验。
-- **guideLine / guideCy** 不在本 spec。
-- **fitMode / minGap / maxGap** 语义不变,只是不再和 topCy 绑在一个字段里(topCy 来源改为 line 元素)。
-
-## 9. Out-of-scope
-
-- 竖线(vline)类型 —— 预留 type 名,不实现。
-- guideLine 的 px 化。
+- 公共转换库(config → 业务结构)。
+- 游戏端 reader、旧页面 json 迁移、单测 —— 下游接转换库时各自适配,不在本 spec。
+- 竖线(vline)类型 —— 仅预留 type 名。
+- guideLine 的元素化 / px 化。
