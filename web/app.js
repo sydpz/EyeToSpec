@@ -483,6 +483,28 @@ let envSafeTopEl = null;
 let envSafeBotEl = null;
 let envCapsuleEl = null;
 
+// Read the anchor line's canvas-px position, tolerant of both the legacy
+// normalized cy (0..1) and a future px y. Live drag state (anchorCy) wins.
+function anchorLineY(canvasH) {
+  if (Number.isFinite(anchorCy)) return anchorCy * canvasH;   // live/seed fraction
+  const a = manifest && manifest.anchorLine;
+  if (a && Number.isFinite(a.y))  return a.y;                 // future: px
+  if (a && Number.isFinite(a.cy)) return a.cy * canvasH;      // legacy: fraction
+  return null;
+}
+
+// Derive the frame's top-edge y (px) from its align rule. baseline pins the
+// frame's TOP edge to the anchor line; falls back to 0 if no line exists.
+function frameYForAlign(align, frameH, canvasH) {
+  switch (align) {
+    case 'bottom':   return canvasH - frameH;
+    case 'center':   return (canvasH - frameH) / 2;
+    case 'baseline': { const ly = anchorLineY(canvasH); return ly == null ? 0 : ly; }
+    case 'top':
+    default:         return 0;
+  }
+}
+
 // The frame's on-screen rect. env.frame is canvas px, top-left origin
 // (x/y/w/h); multiply by display scale to get screen px.
 function envFrameRect() {
@@ -1243,6 +1265,13 @@ function updateAlignBar() {
   const ungrp = bar.querySelector('[data-ungroup]');
   if (grp) grp.disabled = n < 2;
   if (ungrp) ungrp.disabled = !selectedElements().some(e => e.group);
+  // Anchor-all: any selection (1+). Highlight the shared anchor if unanimous.
+  const anchors = new Set(selectedElements().map(e => e.anchor || 'baseline'));
+  const shared = anchors.size === 1 ? [...anchors][0] : null;
+  bar.querySelectorAll('[data-anchor-all]').forEach(b => {
+    b.disabled = n < 1;
+    b.classList.toggle('on', b.dataset.anchorAll === shared);
+  });
 }
 
 function wireAlignBar() {
@@ -1258,6 +1287,8 @@ function wireAlignBar() {
   const ungrp = bar.querySelector('[data-ungroup]');
   if (grp) grp.addEventListener('click', groupSelection);
   if (ungrp) ungrp.addEventListener('click', ungroupSelection);
+  bar.querySelectorAll('[data-anchor-all]').forEach(b =>
+    b.addEventListener('click', () => setSelectionAnchor(b.dataset.anchorAll)));
 }
 
 // ---------------------------------------------------------------------------
@@ -1290,6 +1321,22 @@ function ungroupSelection() {
   renderList();
   refreshSelectionUI();
   toast('Ungrouped');
+}
+
+// Set the runtime anchor for the whole selection at once. "top" pins every
+// member to the screen top (safe area); each element's own y then reads as its
+// offset below that edge, so a grouped cluster stays top-aligned while keeping
+// its internal spacing. Works on any multi-selection (grouped or not).
+function setSelectionAnchor(anchor) {
+  const sel = selectedElements();
+  if (!sel.length) return;
+  for (const el of sel) {
+    el.anchor = anchor;
+    const node = nodes.get(el.id);
+    if (node) node.classList.toggle('is-hud', anchor === 'top');
+  }
+  refreshSelectionUI();
+  toast('Anchor → ' + anchor + ' (' + sel.length + ')');
 }
 
 // ---------------------------------------------------------------------------
@@ -1586,7 +1633,7 @@ function buildOutput() {
     if (el.flipH) geo.flipH = true;
     if (el.flipV) geo.flipV = true;
     if (Number.isFinite(el.depth)) geo.depth = el.depth;   // paint order
-    if (el.anchor && el.anchor !== 'baseline') geo.anchor = el.anchor;  // default baseline omitted
+    if (el._added && el.anchor && el.anchor !== 'baseline') geo.anchor = el.anchor;  // dup: default baseline omitted
     if (el.label) geo.label = el.label;   // layer tag, omitted when untagged
     if (el.enabled === false) geo.enabled = false;  // soft-delete flag
     if (el._added) {
@@ -1607,6 +1654,12 @@ function buildOutput() {
       // group binding: emit when changed (empty string flags a removal so
       // write-back drops the field). Top-level, not detail (serve _GEO_KEYS).
       if ((el.group || '') !== (orig.group || '')) geo.group = el.group || '';
+      // anchor: emit when changed. Empty/baseline flags a removal (serve drops
+      // it via _GEO_KEYS empty-string handling), so switching back to baseline
+      // clears a previously-saved anchor instead of leaving it stuck.
+      if ((el.anchor || 'baseline') !== (orig.anchor || 'baseline')) {
+        geo.anchor = (el.anchor === 'baseline') ? '' : (el.anchor || '');
+      }
       out[el.id] = geo;
     }
   }
