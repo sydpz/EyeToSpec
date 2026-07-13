@@ -1771,6 +1771,22 @@ function buildOutput() {
       out.anchorLine = { cx: 0.5, cy: round3(anchorCy), w: 1, h: 0.04 };
     }
   }
+  // env.frame + safe bands: only when the frame panel was touched this session.
+  if (frameDirty) {
+    const env = {};
+    if (frameState) {
+      env.frame = {
+        x: Math.round(frameState.x), y: Math.round(frameState.y),
+        w: Math.round(frameState.w), h: Math.round(frameState.h),
+        align: frameState.align || 'top',
+      };
+    }
+    const et = manifest.env && manifest.env.safeTop;
+    const eb = manifest.env && manifest.env.safeBottom;
+    if (et && Number.isFinite(et.h)) env.safeTop = { h: Math.round(et.h) };
+    if (eb && Number.isFinite(eb.h)) env.safeBottom = { h: Math.round(eb.h) };
+    if (Object.keys(env).length) out.env = env;
+  }
   return out;
 }
 
