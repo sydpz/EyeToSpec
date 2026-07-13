@@ -132,11 +132,13 @@ async function init() {
       rotation: num(s.rotation, el.rotation, 0),  // degrees, clockwise
       flipH: bool(s.flipH, el.flipH, false),  // mirror left-right
       flipV: bool(s.flipV, el.flipV, false),  // mirror top-bottom
-      // anchor: which reference an element is pinned to. "baseline" (default) =
-      // moves with the pack's baseline/background; "top" = floats to the safe-area
-      // top (HUD). Mirrors game-engine anchor systems (Unity RectTransform / Cocos
-      // Widget); we currently implement two of the values.
-      anchor: str(s.anchor, el.anchor, 'baseline'),
+      // anchor: which screen edge this element pins to during runtime adaptation.
+      // Default 'none' = the element is a FIXED instance on the absolute canvas
+      // (moves with the board, pins to no edge) — e.g. the hen/background, which
+      // sit at fixed canvas px and need no anchor. 'top' = pins to the screen top
+      // (HUD); 'bottom' = pins to the screen bottom; 'baseline' = pins to the
+      // anchor-line. The runtime (③) consumes this; EyeToSpec only stores it.
+      anchor: str(s.anchor, el.anchor, 'none'),
       depth: num(s.depth, el.depth, 0),   // paint order (low = underneath)
       // label: layer tag (single string, e.g. "overlay"/"scroll"). Pure grouping
       // annotation — the runtime maps it to a layer role; EyeToSpec stores + filters.
@@ -335,50 +337,12 @@ function applyCanvasBackground() {
       div.style.height = (bg.h / CH * 100) + '%';
       div.dataset.boxBg = '1';
       canvasEl.appendChild(div);
-    } else if (bg.fit === 'width-top' || bg.fit === 'width-bottom') {
-      // The game draws this bg via fillBackgroundWidth: WIDTH-filled (100%) +
-      // anchored + overflow-cropped (never contain-centered). Render a single
-      // .bg-layer to match — same model as the combine stacked layers — so the
-      // owner sees elements sitting on the bg where they truly land at runtime.
-      // A repeating bg (overlay grass body) tiles downward to fill the canvas.
-      // width-bottom pins the art to the canvas BOTTOM (crops the TOP) — the
-      // baseline-anchored pages (endless) whose tall bg overflows upward.
-      const bottomAnchored = bg.fit === 'width-bottom';
-      canvasEl.style.backgroundImage = '';
-      const div = document.createElement('div');
-      div.className = 'bg-layer';
-      div.dataset.repeat = bg.repeat ? '1' : '';
-      div.style.backgroundImage = `url("${bgUrl(bg.file)}")`;
-      div.style.backgroundRepeat = bg.repeat ? 'repeat-y' : 'no-repeat';
-      div.style.backgroundPosition = (bottomAnchored ? 'bottom' : 'top') + ' center';
-      div.style.backgroundSize = '100% auto';
-      div.style.left = '0';
-      div.style.width = '100%';
-      if (bottomAnchored) {
-        // Bottom-pinned: the layer fills the whole canvas and CSS bottom-center
-        // background-position shows the art's bottom, cropping the overflow off
-        // the top — exactly the game's baseline anchor. Skip positionBgLayers
-        // (it re-seats from the top for the stacked/top model).
-        div.dataset.bottomAnchored = '1';
-        div.style.top = '0';
-        div.style.bottom = '0';
-        canvasEl.appendChild(div);
-      } else {
-        // topCy (0..1): the panel scroll-bg tucks its top under the head at the real
-        // screen y, not y=0. Stash it so positionBgLayers (which runs on every
-        // layout and would otherwise reset top to 0) seats the layer there — the bg
-        // peeks just above the guide line, candidates below (scene base+panel model).
-        if (Number.isFinite(bg.topCy)) div.dataset.topCy = String(bg.topCy);
-        div.style.top = (Number.isFinite(bg.topCy) ? bg.topCy * 100 : 0) + '%';
-        div.style.bottom = '0';
-        canvasEl.appendChild(div);
-        positionBgLayers();
-      }
     } else {
-      // Other pages (home baseline): the bg is anchorY-centered, art bleeds off
-      // top/bottom without side-crop — contain keeps it whole and centered.
-      canvasEl.style.backgroundImage = `url("${bgUrl(bg.file)}")`;
-      canvasEl.style.backgroundSize = bg.cover ? 'cover' : 'contain';
+      // No box coords → nothing to place. The legacy fit-string branches
+      // (width-top / width-bottom / contain) were removed: background is now a
+      // pure-coordinate element (x/y/w/h), placed exactly like any other. A pack
+      // still missing coords just shows the checker until it's given a box.
+      canvasEl.classList.add('checker');
     }
   } else {
     canvasEl.classList.add('checker');
@@ -511,7 +475,6 @@ function anchorLineY(canvasH) {
 function frameYForAlign(align, frameH, canvasH) {
   switch (align) {
     case 'bottom':   return canvasH - frameH;
-    case 'center':   return (canvasH - frameH) / 2;
     case 'baseline': { const ly = anchorLineY(canvasH); return ly == null ? 0 : ly; }
     case 'top':
     default:         return 0;
@@ -1249,7 +1212,11 @@ function updateAlignBar() {
 // ---------------------------------------------------------------------------
 let frameDirty = false;   // frame panel touched -> buildOutput emits env
 
-const FRAME_ALIGNS = ['top', 'bottom', 'center', 'baseline'];
+// Three screen-extension directions (center removed: it's just baseline with the
+// line at 50%, so it added a redundant second way to say the same thing). top =
+// frame bites the canvas top, content extends DOWN; bottom = bites the bottom,
+// extends UP; baseline = frame top pins to the anchor-line, extends BOTH ways.
+const FRAME_ALIGNS = ['top', 'bottom', 'baseline'];
 
 function renderFramePanel() {
   const panel = document.getElementById('frame-panel');

@@ -76,7 +76,7 @@ isn't theirs, so they never collide.
   "name": "Loadout (live · absolute px)",
   "description": "…",
   "canvas": { "width": 720, "height": 2200 },
-  "background": { "tex": "home-bg", "fit": "width-bottom" },
+  "background": { "tex": "home-bg", "x": 0, "y": 0, "w": 720, "h": 2200 },
 
   "assetProfiles": "apps/web-client/asset-profiles.json",
   "repo": "/abs/path/to/game-repo",
@@ -86,12 +86,13 @@ isn't theirs, so they never collide.
     "slot1": {
       "type": "image", "depth": 10,
       "x": 56, "y": 320, "w": 132, "h": 128,
+      "anchor": "top",
       "detail": { "tex": "loadout-slot" }
     }
   },
 
   "env": {
-    "frame":      { "x": 0, "y": 0, "w": 720, "h": 1600 },
+    "frame":      { "x": 0, "y": 0, "w": 720, "h": 1600, "align": "top" },
     "safeTop":    { "h": 112, "name": "safe top 7%" },
     "safeBottom": { "h": 64,  "name": "safe bottom" },
     "wxCapsule":  { "name": "WeChat no-tap zone", "x": 545, "y": 90, "w": 155, "h": 65, "basisW": 720 }
@@ -139,22 +140,20 @@ background too.
 Omit `background` entirely for an **empty-canvas page** (dialogs, panels) — the
 board renders blank.
 
-**Legacy — `fit` mode strings** (kept only as a fallback for old packs; do not
-use in new packs):
+`layers` (optional array of `{ tex, repeat }`) still stacks backgrounds (hut
+head over grass body); each layer resolves its own `tex`.
 
-```json
-"background": { "tex": "home-bg", "fit": "width-bottom" }
-```
-
-| Field | Meaning |
-|-------|---------|
-| `fit` | how it fills: `width-top` \| `width-bottom` (width-locked, anchored, overflow shows) · `contain` \| `cover` (whole-board) |
-| `layers` | optional array of `{ tex, repeat }` for stacked backgrounds (hut head over grass body) |
-
-These mode strings pre-date the pure-coordinate form: the background used to
-*guess* how to fill (contain / cover / width-lock + anchor) instead of being told
-a box. New packs place the background by coordinates; `env`/`canvas` are declared
-independently and neither defines the other.
+**Removed — the `fit` mode string.** Older packs carried `fit`
+(`width-top`/`width-bottom`/`contain`/`cover`) so the renderer would *guess* how
+to fill the board. That is gone: the background is placed by `x/y/w/h` like
+everything else, and the width-lock is a pure calc (`displayH = nativeH ×
+canvas.width / nativeW`), not a stored mode. **Which edge the content bites is a
+property of the viewport, not the background** — it lives on `env.frame.align`
+(see below), and the background never derives its position from it. `env`,
+`canvas`, and `background` are each declared independently; none defines another.
+See [`canvas-frame-background-coords.md`](./canvas-frame-background-coords.md) for
+the full canvas/frame/background coordinate model and the sign rules for long
+scroll pages.
 
 ### `elements`
 
@@ -173,6 +172,7 @@ Every element:
 | `flipH` / `flipV` | mirror (optional) |
 | `label` | layer tag (optional, single string). A grouping annotation — e.g. `"overlay"` vs `"scroll"` — that marks which layer an element belongs to when several are composited onto one board. EyeToSpec only stores it and lets you filter the canvas by it; the **runtime** maps a label to a layer role (fixed vs scrollable). Absent = untagged. |
 | `group` | group binding (optional, single string). Flat — an element belongs to at most one group, groups do not nest. In EyeToSpec, selecting any member selects the whole group, and alignment treats a group as one rigid unit (its combined bounding box). The **runtime** uses it to scale by the group's composed structure rather than per-element. Absent = ungrouped. |
+| `anchor` | screen-edge pinning for real-screen adaptation (optional): `top` (pin to the screen top / HUD), `bottom` (pin to the screen bottom), `baseline` (pin to the `anchor-line`), `none` (**default** — a fixed instance on the absolute canvas, pinned to no edge; e.g. hen/background). This is the **per-element** layer; `env.frame.align` is the **page-level** viewport direction (§ `env`). The two are orthogonal — an element's `anchor` does not derive from the page `align`. |
 | `detail` | type-specific payload (below) |
 
 **`detail` by type**
@@ -201,7 +201,7 @@ meaningless without a screen to hang them on).
 
 | Component | Fields | Meaning |
 |-----------|--------|---------|
-| `frame` | `x`, `y`, `w`, `h` (px, top-left) | The phone viewport rectangle, placed **freely** on the board. It does **not** have to sit at the top — a long strip's frame is the first screen-height slice, with scroll content below it. |
+| `frame` | `x`, `y`, `w`, `h` (px, top-left), `align` | The phone viewport rectangle, placed **freely** on the board. It does **not** have to sit at the top — a long strip's frame is the first screen-height slice, with scroll content below it. `align` = which board edge the frame bites / which way the screen extends when it grows: `top` (frame at `y=0`, content extends **down** — home/challenge), `bottom` (frame at `y=canvasH−frameH`, extends **up** — endless), `baseline` (frame top pins to an `anchor-line` element, extends **both ways**). `center` was removed (it equals `baseline` with the line at 50%). This is page-level; per-element edge pinning is `element.anchor` (§ `elements`). |
 | `safeTop` / `safeBottom` | `h` (px, of the frame height), optional `name` | Translucent unsafe bands at the top/bottom **inside the frame**. The label shows the name so you can tell a 7% band from a 5% one at a glance. |
 | `wxCapsule` | `x`, `y`, `w`, `h`, `basisW`, optional `name` | WeChat's menu capsule (the forward/close pill, top-right, un-tappable). It is a **physically fixed size** — WeChat lays it out by width, so it scales by the frame's **width** factor (`frame.w / basisW`) and never by screen height. Using a height fraction here would drift between a 1280-tall and a 1600-tall screen. |
 

@@ -131,7 +131,7 @@ _DETAIL_FIELDS = {
 }
 # Common (type-agnostic) geometry/orientation fields copied verbatim.
 _COMMON_FIELDS = ("x", "y", "w", "h", "rotation", "flipH", "flipV", "alpha",
-                  "label", "group")
+                  "label", "group", "anchor")
 
 
 def _num(v, d):
