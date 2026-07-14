@@ -122,7 +122,7 @@ def read_group(group_dir):
 # render node the front-end consumes. Position/size/orientation are common and
 # handled separately; these are purely the "what it looks like" fields.
 _DETAIL_FIELDS = {
-    "image": ("tex", "fit"),
+    "image": ("tex", "fit", "alpha"),
     "text": ("text", "fontSize", "fontFamily", "fontWeight", "color", "align",
              "stroke", "strokeWidth", "shadow", "fill", "alpha"),
     "box": ("fill", "alpha", "radius", "stroke", "strokeWidth"),
@@ -189,6 +189,8 @@ def _rebuild_element(entry, profiles):
         detail = {"tex": _file_to_tex(entry["file"], profiles)}
         if "fit" in entry:
             detail["fit"] = entry["fit"]
+        if "alpha" in entry:
+            detail["alpha"] = entry["alpha"]
     elif "text" in entry:
         etype = "text"
         detail = {f: entry[f] for f in _DETAIL_FIELDS["text"] if f in entry}

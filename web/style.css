@@ -558,15 +558,39 @@ code {
 .el-label-tag { color: #6ecf9a; }
 .el-group-tag { color: #e0a94f; text-transform: none; }
 .label-filter {
-  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
   margin: 0 0 0.5rem;
-  padding: 0.3rem 0.4rem;
+}
+.label-chip {
+  padding: 0.22rem 0.5rem;
   background: var(--bg-elev-2);
   color: var(--text);
   border: 1px solid var(--border, #333);
-  border-radius: 6px;
-  font-size: 0.78rem;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  cursor: pointer;
+  user-select: none;
+  opacity: 0.62;
 }
+.label-chip:hover { opacity: 0.85; }
+.label-chip.is-active {
+  opacity: 1;
+  background: rgba(110, 207, 154, 0.18);
+  border-color: #6ecf9a;
+  color: #6ecf9a;
+}
+.label-chip.chip-all.is-active {
+  background: rgba(224, 169, 79, 0.18);
+  border-color: #e0a94f;
+  color: #e0a94f;
+}
+.insp-opacity { margin-top: 0.6rem; }
+.insp-opacity > label { display: block; font-size: 0.75rem; color: var(--text-dim, #9aa); }
+.insp-opacity-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem; }
+.insp-opacity-row input[type="range"] { flex: 1; }
+.insp-opacity-val { min-width: 2.6rem; text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
 .el-toggle { background: none; border: none; cursor: pointer; font-size: 0.85rem; padding: 0 0.15rem; opacity: 0.6; }
 .el-toggle:hover { opacity: 1; }
 

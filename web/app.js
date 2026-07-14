@@ -51,11 +51,17 @@ const canvasEl = document.getElementById('canvas');
 const listEl = document.getElementById('element-list');
 const labelFilterEl = document.getElementById('label-filter');
 const inspectorEl = document.getElementById('inspector');
-if (labelFilterEl) labelFilterEl.addEventListener('change', () => {
-  labelFilter = labelFilterEl.value;
+// Toggle a layer chip. Clicking chips accumulates: several active at once draw
+// their layers together on the one canvas. Clicking "All" (or the last active
+// chip off) clears back to show-everything.
+function toggleLayer(label) {
+  if (label === '') { labelFilters.clear(); }
+  else if (labelFilters.has(label)) { labelFilters.delete(label); }
+  else { labelFilters.add(label); }
+  refreshLabelFilter();
   renderElements();
   renderList();
-});
+}
 const toastEl = document.getElementById('toast');
 
 let manifest = null;      // the pack.json
@@ -64,9 +70,15 @@ let nodes = new Map();    // id -> DOM node
 let selectedIds = new Set();  // multi-select; single-select is a set of one
 // The "primary" selection (last clicked) drives the single-element inspector.
 let primaryId = null;
-// Layer filter: when non-empty, only elements whose `label` equals it are shown
-// (canvas + list). '' = show all. Driven by the #label-filter dropdown.
-let labelFilter = '';
+// Layer filter: a set of active layer labels. Empty = show all. Non-empty =
+// show only elements whose `label` is in the set — several layers can be active
+// at once so two (or more) draw together on the one canvas. Driven by the
+// #label-filter chip row.
+let labelFilters = new Set();
+// True when an element passes the current layer filter (empty set = everything).
+function passesLayerFilter(el) {
+  return labelFilters.size === 0 || labelFilters.has((el.label || '').trim());
+}
 let canvasAspect = 1;     // w / h of the pack canvas
 let zoom = 1;             // 1 = fit-to-viewport; >1 = magnified (stage-wrap scrolls)
 const ZOOM_MIN = 1, ZOOM_MAX = 6, ZOOM_STEP = 1.25;
@@ -713,7 +725,7 @@ function renderElements() {
   nodes.clear();
   for (const el of elements) {
     if (el.enabled === false) continue;   // soft-deleted: not on canvas
-    if (labelFilter && el.label !== labelFilter) continue;  // layer filter
+    if (!passesLayerFilter(el)) continue;  // layer filter
     const node = document.createElement('div');
     node.className = 'el';
     if (el.anchor === 'top') node.classList.add('is-hud');
@@ -822,6 +834,13 @@ function placeNode(el) {
   if (el.rotation) tf.push('rotate(' + el.rotation + 'deg)');
   if (el.flipH || el.flipV) tf.push('scale(' + (el.flipH ? -1 : 1) + ',' + (el.flipV ? -1 : 1) + ')');
   node.style.transform = tf.join(' ');
+  // Image opacity: el.alpha (0..1) dims the whole element. Boxes paint their own
+  // alpha into the fill (see above), so only apply node opacity to images; a
+  // missing/1 alpha leaves it fully opaque.
+  if (el.file) {
+    const a = Number(el.alpha);
+    node.style.opacity = (Number.isFinite(a) && a < 1) ? String(Math.max(0, a)) : '';
+  }
 
   if (node.classList.contains('el-text')) {
     const fs = (parseFloat(node.dataset.fontSize) || 16) * S;
@@ -1401,16 +1420,26 @@ function refreshLabelFilter() {
   if (!labelFilterEl) return;
   const labels = Array.from(new Set(
     elements.map(e => (e.label || '').trim()).filter(Boolean))).sort();
-  if (labelFilter && !labels.includes(labelFilter)) labelFilter = '';
-  labelFilterEl.innerHTML = '<option value="">All layers</option>' +
-    labels.map(l => `<option value="${l}">${l}</option>`).join('');
-  labelFilterEl.value = labelFilter;
+  // Drop any active filter whose layer no longer exists.
+  for (const l of Array.from(labelFilters)) if (!labels.includes(l)) labelFilters.delete(l);
+  labelFilterEl.innerHTML = '';
+  // "All" chip — active when no specific layer is selected.
+  const chips = [{ value: '', text: 'All', cls: 'chip-all', active: labelFilters.size === 0 }]
+    .concat(labels.map(l => ({ value: l, text: l, cls: '', active: labelFilters.has(l) })));
+  for (const c of chips) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'label-chip' + (c.cls ? ' ' + c.cls : '') + (c.active ? ' is-active' : '');
+    chip.textContent = c.text;
+    chip.addEventListener('click', () => toggleLayer(c.value));
+    labelFilterEl.appendChild(chip);
+  }
 }
 
 function renderList() {
   listEl.innerHTML = '';
   for (const el of elements) {
-    if (labelFilter && el.label !== labelFilter) continue;  // layer filter
+    if (!passesLayerFilter(el)) continue;  // layer filter
     const li = document.createElement('li');
     li.dataset.id = el.id;
     const kind = el.file ? 'image' : (typeof el.text === 'string' ? 'text' : 'box');
@@ -1469,6 +1498,15 @@ function updateInspector() {
       </div>
       <label class="insp-color">color<span class="insp-color-row"><input id="insp-color" type="color" value="${/^#[0-9a-fA-F]{6}$/.test(el.color || '') ? el.color : '#ffffff'}"><input id="insp-color-hex" type="text" spellcheck="false" value="${escAttr(el.color || '#ffffff')}"></span></label>
     </div>` : ''}
+    ${el.file ? `
+    <div class="insp-opacity">
+      <label>opacity
+        <span class="insp-opacity-row">
+          <input id="insp-opacity" type="range" min="0" max="100" step="1" value="${Math.round((Number.isFinite(Number(el.alpha)) ? Number(el.alpha) : 1) * 100)}">
+          <span id="insp-opacity-val" class="insp-opacity-val">${Math.round((Number.isFinite(Number(el.alpha)) ? Number(el.alpha) : 1) * 100)}%</span>
+        </span>
+      </label>
+    </div>` : ''}
     <div class="insp-flip">
       <button data-flip="flipH" class="flip-btn${el.flipH ? ' on' : ''}">↔ flip H</button>
       <button data-flip="flipV" class="flip-btn${el.flipV ? ' on' : ''}">↕ flip V</button>
@@ -1484,7 +1522,11 @@ function updateInspector() {
     </div>
     <div class="insp-label">
       <label>layer label
-        <input id="insp-label" type="text" spellcheck="false" placeholder="e.g. overlay / scroll" value="${escAttr(el.label || '')}">
+        <input id="insp-label" type="text" spellcheck="false" list="insp-label-options" placeholder="e.g. overlay / scroll" value="${escAttr(el.label || '')}">
+        <datalist id="insp-label-options">${
+          Array.from(new Set(elements.map(e => (e.label || '').trim()).filter(Boolean))).sort()
+            .map(l => `<option value="${escAttr(l)}"></option>`).join('')
+        }</datalist>
       </label>
     </div>
     <div class="insp-actions">
@@ -1493,11 +1535,24 @@ function updateInspector() {
     </div>`;
   inspectorEl.querySelector('.insp-id').textContent = el.id;
   const labelInp = inspectorEl.querySelector('#insp-label');
-  if (labelInp) labelInp.addEventListener('change', () => {
+  // `input` (not `change`) so picking a datalist option or typing both apply
+  // live — a datalist selection doesn't always fire `change`.
+  if (labelInp) labelInp.addEventListener('input', () => {
     el.label = labelInp.value.trim();
     refreshLabelFilter();
     renderList();
     renderElements();   // label may drop el out of / into the active filter
+  });
+  // Image opacity slider (0..100% -> el.alpha 0..1). Live-applies to the node;
+  // saved via IDENTITY_KEYS ('alpha') -> serve folds it into image detail.alpha,
+  // which round-trips to the runtime.
+  const opacityInp = inspectorEl.querySelector('#insp-opacity');
+  const opacityVal = inspectorEl.querySelector('#insp-opacity-val');
+  if (opacityInp) opacityInp.addEventListener('input', () => {
+    const pct = Math.max(0, Math.min(100, Number(opacityInp.value)));
+    el.alpha = pct / 100;
+    if (opacityVal) opacityVal.textContent = pct + '%';
+    placeNode(el);   // opacity applies in placeNode
   });
   inspectorEl.querySelectorAll('[data-center]').forEach(btn =>
     btn.addEventListener('click', () => centerOnCanvas(btn.dataset.center)));
