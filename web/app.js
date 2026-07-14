@@ -194,6 +194,7 @@ async function init() {
   wireToolbar();
   wireAlignBar();
   renderFramePanel();
+  renderBgPanel();
 
   // Delete / Backspace soft-deletes the selection (ignored while typing coords).
   window.addEventListener('keydown', (e) => {
@@ -348,6 +349,18 @@ function applyCanvasBackground() {
       div.style.width = (bg.w / CW * 100) + '%';
       div.style.height = (bg.h / CH * 100) + '%';
       div.dataset.boxBg = '1';
+      // overlay: a scrim painted ON the background image (darken/tint). Same
+      // config field as image elements; round-trips to the runtime. Plain div so
+      // render-mode's box-transparency rule can't wipe it (survives screenshots).
+      if (bg.overlay && typeof bg.overlay === 'object') {
+        const ov = document.createElement('div');
+        ov.className = 'bg-overlay';
+        ov.style.position = 'absolute';
+        ov.style.inset = '0';
+        ov.style.pointerEvents = 'none';
+        ov.style.background = hexAlpha(bg.overlay.fill || '#000000', bg.overlay.alpha);
+        div.appendChild(ov);
+      }
       canvasEl.appendChild(div);
     } else {
       // No box coords → nothing to place. The legacy fit-string branches
@@ -752,6 +765,20 @@ function renderElements() {
         }
       });
       node.appendChild(img);
+      // overlay: a scrim painted ON the image itself (darken/tint). Config
+      // round-trips to the runtime, which re-applies the same tint at play time.
+      // A plain <div> (not .el-box) so render-mode's box-transparency rule can't
+      // wipe it — the darkening must survive into the screenshot/agent preview.
+      if (el.overlay && typeof el.overlay === 'object') {
+        const ov = document.createElement('div');
+        ov.className = 'el-img-overlay';
+        ov.style.position = 'absolute';
+        ov.style.inset = '0';
+        ov.style.pointerEvents = 'none';
+        ov.style.background = hexAlpha(el.overlay.fill || '#000000', el.overlay.alpha);
+        if (el.overlay.radius) ov.style.borderRadius = el.overlay.radius + 'px';
+        node.appendChild(ov);
+      }
     } else if (typeof el.text === 'string') {
       node.classList.add('el-text');
       const span = document.createElement('span');
@@ -1230,6 +1257,46 @@ function updateAlignBar() {
 // safe bands). frame is a single global object — no canvas select/drag.
 // ---------------------------------------------------------------------------
 let frameDirty = false;   // frame panel touched -> buildOutput emits env
+let bgDirty = false;      // background overlay touched -> buildOutput emits background
+
+// Background overlay panel: reads/writes manifest.background.overlay. Background
+// isn't a selectable element (it's a top-level field), so it gets its own always-
+// on sidebar panel — same overlay controls as the image inspector.
+function renderBgPanel() {
+  const panel = document.getElementById('bg-panel');
+  if (!panel) return;
+  const bg = manifest.background;
+  if (!bg || !bg.file) {
+    panel.innerHTML = '<div class="frame-empty">This pack has no background image.</div>';
+    return;
+  }
+  panel.innerHTML = overlayControlsHTML(bg.overlay);
+  const ovRoot = panel.querySelector('.insp-overlay');
+  if (ovRoot) wireOverlayControls(ovRoot, () => manifest.background, () => {
+    bgDirty = true;
+    applyBgOverlay();
+  });
+}
+
+// Repaint the background's overlay div from manifest.background.overlay without
+// a full canvas rebuild. Mirrors applyImgOverlay for the .bg-layer box.
+function applyBgOverlay() {
+  const bgDiv = canvasEl.querySelector('.bg-layer[data-box-bg]');
+  if (!bgDiv) { applyCanvasBackground(); return; }
+  const ov0 = bgDiv.querySelector('.bg-overlay');
+  const bg = manifest.background;
+  if (!bg.overlay) { if (ov0) ov0.remove(); return; }
+  let ov = ov0;
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.className = 'bg-overlay';
+    ov.style.position = 'absolute';
+    ov.style.inset = '0';
+    ov.style.pointerEvents = 'none';
+    bgDiv.appendChild(ov);
+  }
+  ov.style.background = hexAlpha(bg.overlay.fill || '#000000', bg.overlay.alpha);
+}
 
 // Three screen-extension directions (center removed: it's just baseline with the
 // line at 50%, so it added a redundant second way to say the same thing). top =
@@ -1507,6 +1574,7 @@ function updateInspector() {
         </span>
       </label>
     </div>` : ''}
+    ${el.file ? overlayControlsHTML(el.overlay) : ''}
     <div class="insp-flip">
       <button data-flip="flipH" class="flip-btn${el.flipH ? ' on' : ''}">↔ flip H</button>
       <button data-flip="flipV" class="flip-btn${el.flipV ? ' on' : ''}">↕ flip V</button>
@@ -1649,6 +1717,32 @@ function updateInspector() {
     applyColor(v);
     if (colorInp) colorInp.value = v;
   });
+  // Image overlay (scrim on the image itself). Live-repaint the node's overlay
+  // div; persisted via IDENTITY_KEYS ('overlay') → detail.overlay in pack.json.
+  const ovRoot = inspectorEl.querySelector('.insp-overlay');
+  if (ovRoot && el.file) {
+    wireOverlayControls(ovRoot, () => el, () => applyImgOverlay(el));
+  }
+}
+
+// Repaint a single image element's overlay div from el.overlay, without a full
+// re-render. Adds the div if missing, updates its color/alpha, removes it when
+// the overlay was toggled off.
+function applyImgOverlay(el) {
+  const node = nodes.get(el.id);
+  if (!node) return;
+  let ov = node.querySelector('.el-img-overlay');
+  if (!el.overlay) { if (ov) ov.remove(); return; }
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.className = 'el-img-overlay';
+    ov.style.position = 'absolute';
+    ov.style.inset = '0';
+    ov.style.pointerEvents = 'none';
+    node.appendChild(ov);
+  }
+  ov.style.background = hexAlpha(el.overlay.fill || '#000000', el.overlay.alpha);
+  if (el.overlay.radius) ov.style.borderRadius = el.overlay.radius + 'px';
 }
 
 // ZCOOL KuaiLe is single-weight, so font-weight alone can't render bold. Simulate
@@ -1666,6 +1760,80 @@ function applyFauxBold(span, fontWeight, color) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Overlay (scrim) controls — shared by the image inspector and the background
+// panel. A scrim painted ON the image/background (darken/tint). The value is a
+// {fill, alpha} object stored under detail.overlay; it round-trips to pack.json
+// and the runtime re-applies the same tint at play time (config round-trip).
+// ---------------------------------------------------------------------------
+function overlayControlsHTML(ov) {
+  const on = !!ov;
+  const fill = (ov && /^#[0-9a-fA-F]{6}$/.test(ov.fill || '')) ? ov.fill : '#000000';
+  const alpha = (ov && Number.isFinite(ov.alpha)) ? ov.alpha : 0.5;
+  return '' +
+    '<div class="insp-overlay">' +
+      '<label class="ov-toggle"><input type="checkbox" class="ov-on"' + (on ? ' checked' : '') + '> 蒙层 overlay</label>' +
+      '<div class="ov-body' + (on ? '' : ' ov-off') + '">' +
+        '<label class="insp-color">颜色<span class="insp-color-row">' +
+          '<input type="color" class="ov-color" value="' + fill + '">' +
+          '<input type="text" class="ov-color-hex" spellcheck="false" value="' + fill + '">' +
+        '</span></label>' +
+        '<label class="ov-alpha">alpha ' +
+          '<input type="range" class="ov-alpha-range" min="0" max="1" step="0.05" value="' + alpha + '">' +
+          '<span class="ov-alpha-val">' + alpha.toFixed(2) + '</span>' +
+        '</label>' +
+      '</div>' +
+    '</div>';
+}
+
+// Wire the overlay controls inside `root`. `get()` returns the owner object that
+// holds `.overlay` (an element, or manifest.background); `onChange()` re-renders
+// the live preview + flags dirty. Toggling off deletes the overlay field.
+function wireOverlayControls(root, get, onChange) {
+  const onBox = root.querySelector('.ov-on');
+  const body = root.querySelector('.ov-body');
+  const colorInp = root.querySelector('.ov-color');
+  const colorHex = root.querySelector('.ov-color-hex');
+  const alphaRange = root.querySelector('.ov-alpha-range');
+  const alphaVal = root.querySelector('.ov-alpha-val');
+  if (onBox) onBox.addEventListener('change', () => {
+    const owner = get();
+    if (onBox.checked) {
+      owner.overlay = owner.overlay || { fill: '#000000', alpha: 0.5 };
+      body.classList.remove('ov-off');
+    } else {
+      delete owner.overlay;
+      body.classList.add('ov-off');
+    }
+    onChange();
+  });
+  const setFill = (hex) => {
+    const owner = get();
+    if (!owner.overlay) return;
+    owner.overlay.fill = hex;
+    onChange();
+  };
+  if (colorInp) colorInp.addEventListener('input', () => {
+    setFill(colorInp.value);
+    if (colorHex) colorHex.value = colorInp.value;
+  });
+  if (colorHex) colorHex.addEventListener('input', () => {
+    let v = colorHex.value.trim();
+    if (v && v[0] !== '#') v = '#' + v;
+    if (!/^#[0-9a-fA-F]{6}$/.test(v)) return;
+    setFill(v);
+    if (colorInp) colorInp.value = v;
+  });
+  if (alphaRange) alphaRange.addEventListener('input', () => {
+    const owner = get();
+    if (!owner.overlay) return;
+    const a = parseFloat(alphaRange.value);
+    owner.overlay.alpha = a;
+    if (alphaVal) alphaVal.textContent = a.toFixed(2);
+    onChange();
+  });
+}
+
 // Escape a string for safe use inside a double-quoted HTML attribute.
 function escAttr(s) {
   return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
@@ -1679,7 +1847,8 @@ function escAttr(s) {
 // geometry — carried in output._added so a duplicate survives reload without
 // touching pack.json.
 const IDENTITY_KEYS = ['file', 'text', 'color', 'align', 'fontSize', 'fontFamily',
-  'fontWeight', 'stroke', 'strokeWidth', 'shadow', 'fill', 'alpha', 'radius', 'label'];
+  'fontWeight', 'stroke', 'strokeWidth', 'shadow', 'fill', 'alpha', 'radius', 'label',
+  'overlay'];
 
 function buildOutput() {
   const out = {};
@@ -1745,6 +1914,12 @@ function buildOutput() {
     if (et && Number.isFinite(et.h)) env.safeTop = { h: Math.round(et.h) };
     if (eb && Number.isFinite(eb.h)) env.safeBottom = { h: Math.round(eb.h) };
     if (Object.keys(env).length) out.env = env;
+  }
+  // background overlay: only when the bg panel was touched this session. Emits
+  // the overlay object (or null to signal removal). serve folds it onto the
+  // pack's top-level background field.
+  if (bgDirty && manifest.background) {
+    out.background = { overlay: manifest.background.overlay || null };
   }
   return out;
 }

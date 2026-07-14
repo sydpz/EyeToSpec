@@ -122,7 +122,7 @@ def read_group(group_dir):
 # render node the front-end consumes. Position/size/orientation are common and
 # handled separately; these are purely the "what it looks like" fields.
 _DETAIL_FIELDS = {
-    "image": ("tex", "fit", "alpha"),
+    "image": ("tex", "fit", "alpha", "overlay"),
     "text": ("text", "fontSize", "fontFamily", "fontWeight", "color", "align",
              "stroke", "strokeWidth", "shadow", "fill", "alpha"),
     "box": ("fill", "alpha", "radius", "stroke", "strokeWidth"),
@@ -221,7 +221,7 @@ def _apply_diff_to_pack(raw, diff, profiles):
         elements = collections.OrderedDict()
         raw["elements"] = elements
     for key, val in diff.items():
-        if key in ("_added", "elasticZone", "anchorLine", "env"):
+        if key in ("_added", "elasticZone", "anchorLine", "env", "background"):
             continue
         if not isinstance(val, dict):
             continue
@@ -250,7 +250,7 @@ def _apply_diff_to_pack(raw, diff, profiles):
                     continue
                 if ik == "file":
                     det["tex"] = _file_to_tex(iv, profiles)
-                elif ik in _TEXTISH or ik in ("tex", "fit"):
+                elif ik in _TEXTISH or ik in ("tex", "fit", "overlay"):
                     det[ik] = iv
         else:
             elements[key] = _rebuild_element(dict(val, **{"id": key}), profiles)
@@ -285,6 +285,17 @@ def _apply_diff_to_pack(raw, diff, profiles):
                     b = collections.OrderedDict()
                     env[band] = b
                 b["h"] = bdiff["h"]
+    # background overlay: the bg panel edits the top-level background field (not an
+    # element). Merge only the overlay sub-key; a null overlay removes it. Leave
+    # tex/x/y/w/h and any other background fields intact.
+    bg_diff = diff.get("background")
+    if isinstance(bg_diff, dict) and "overlay" in bg_diff:
+        bg = raw.get("background")
+        if isinstance(bg, dict):
+            if bg_diff["overlay"] is None:
+                bg.pop("overlay", None)
+            else:
+                bg["overlay"] = bg_diff["overlay"]
     return raw
 
 

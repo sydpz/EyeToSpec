@@ -130,6 +130,7 @@ because it's a special class of art with its own placement rules.
 | `tex` | texture key (resolved via `assetProfiles`, like an image element) or a direct filename |
 | `x`, `y` | **top-left** corner in canvas px |
 | `w`, `h` | size in canvas px — the image fills that box (`backgroundSize: 100% 100%`) |
+| `overlay` | optional scrim on the background: `{ "fill", "alpha" }`. Same field + semantics as an image element's `overlay` — darkens/tints the whole background to focus the foreground. Authored via the sidebar **背景 Background** panel; config round-trips to the runtime. |
 
 Give `x/y/w/h` and the image paints there, scaling with zoom/resize like every
 element. A tall background (`h` > canvas height) simply **overflows the scroll
@@ -177,8 +178,16 @@ Every element:
 
 **`detail` by type**
 
-- `image` — `{ "tex": "…" }` (a texture key resolved via `assetProfiles`, or a
-  direct filename).
+- `image` — `{ "tex": "…", "fit"?, "overlay"? }`. `tex` is a texture key
+  resolved via `assetProfiles`, or a direct filename. `overlay` (optional) is a
+  scrim painted **on the image itself** to darken/tint it:
+  `{ "fill": "#000000", "alpha": 0.5, "radius"? }`. EyeToSpec paints it over the
+  image box (survives screenshots — not a `box` element, so the render-mode
+  box-transparency rule doesn't wipe it); the **runtime** re-applies the same
+  tint at play time. This is a **config round-trip** — the field is authored in
+  EyeToSpec (inspector: 蒙层 overlay controls) and read back by the game library.
+  Note: the scrim fills the element's **rectangle**, not the PNG's alpha shape;
+  masking to the sprite silhouette is a runtime concern.
 - `text` — `{ "text", "fontSize", "fontFamily", "fontWeight", "color", "align",
   "stroke", "strokeWidth", "shadow", "fill", "alpha" }`. `fontSize` is canvas px.
 - `box` — `{ "fill", "alpha", "radius", "stroke", "strokeWidth" }` for
