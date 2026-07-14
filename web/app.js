@@ -282,6 +282,14 @@ function bgUrl(file) {
   return `/assets/${encodeURIComponent(PACK_ID)}/${encodeURIComponent(file)}`;
 }
 
+// The real on-disk file an image element resolves to, for the inspector. When
+// the pack maps tex keys against a game repo (manifest.assetRoot set), show the
+// absolute path <assetRoot>/<file>; otherwise the pack-relative assets/ path.
+function assetFilePath(file) {
+  const root = manifest && manifest.assetRoot;
+  return root ? root.replace(/\/$/, '') + '/' + file : 'assets/' + file;
+}
+
 function applyCanvasBackground() {
   // remove any previously-drawn stacked layers
   canvasEl.querySelectorAll('.bg-layer').forEach(n => n.remove());
@@ -1573,6 +1581,10 @@ function updateInspector() {
           <span id="insp-opacity-val" class="insp-opacity-val">${Math.round((Number.isFinite(Number(el.alpha)) ? Number(el.alpha) : 1) * 100)}%</span>
         </span>
       </label>
+    </div>
+    <div class="insp-asset" title="The actual image file this element resolves to — check it points where you expect">
+      <span class="insp-asset-label">image file</span>
+      <a class="insp-asset-path" href="${escAttr(bgUrl(el.file))}" target="_blank" rel="noopener">${escAttr(assetFilePath(el.file))}</a>
     </div>` : ''}
     ${el.file ? overlayControlsHTML(el.overlay) : ''}
     <div class="insp-flip">
@@ -1944,6 +1956,9 @@ function wireToolbar() {
   });
   document.addEventListener('click', () => { menu.hidden = true; });   // click-away
   document.getElementById('export-btn').addEventListener('click', showJson);
+  document.getElementById('viewpack-btn').addEventListener('click', showPack);
+  document.getElementById('close-pack-modal').addEventListener('click', () =>
+    document.getElementById('pack-modal').hidden = true);
   document.getElementById('reset-btn').addEventListener('click', resetSeed);
   document.getElementById('close-modal').addEventListener('click', () =>
     document.getElementById('json-modal').hidden = true);
@@ -1973,6 +1988,37 @@ function wireToolbar() {
 function showJson() {
   document.getElementById('json-out').textContent = JSON.stringify(buildOutput(), null, 2);
   document.getElementById('json-modal').hidden = false;
+}
+
+// View pack.json wiring: show the local pack (the on-disk pointer) and, if it
+// references a game-repo source, the resolved absolute path + that file's
+// content — so the owner can confirm the editor is reading the right file.
+async function showPack() {
+  const out = document.getElementById('pack-out');
+  out.textContent = 'Loading…';
+  document.getElementById('pack-modal').hidden = false;
+  let info;
+  try {
+    info = await fetch('/api/rawpack/' + encodeURIComponent(PACK_ID)).then(r => r.json());
+  } catch (err) {
+    out.textContent = 'Failed to load: ' + err;
+    return;
+  }
+  if (info.error) { out.textContent = info.error; return; }
+  const src = info.source;
+  out.innerHTML = `
+    <div class="pack-block">
+      <div class="pack-block-head">Local pack.json${src ? ' (reference pointer)' : ''}</div>
+      <div class="pack-path">${escAttr(info.localPath)}</div>
+      <pre class="json-out">${escAttr(info.local)}</pre>
+    </div>` + (src ? `
+    <div class="pack-block">
+      <div class="pack-block-head">→ Referenced source${src.exists ? '' : ' ⚠ MISSING'}</div>
+      <div class="pack-path${src.exists ? '' : ' pack-path-missing'}">${escAttr(src.path)}</div>
+      ${src.exists
+        ? `<pre class="json-out">${escAttr(src.content)}</pre>`
+        : `<div class="pack-warn">File not found — the reference is broken. Check the pack's <code>repo</code> / <code>source</code>.</div>`}
+    </div>` : '');
 }
 
 // Default Save = write back to pack.json (fold in deletes/duplicates/geometry,

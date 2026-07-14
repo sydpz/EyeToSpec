@@ -110,6 +110,9 @@
           <div class="inspector-empty">Click an element to inspect it.</div>
         </div>
       </div>
+      <div class="sidebar-section">
+        <button id="viewpack-btn" class="btn btn-ghost viewpack-btn" title="Show the pack.json this editor is reading — confirm it points at the right file">🔗 View pack.json</button>
+      </div>
       <div class="sidebar-hint">
         Drag to move · corner handle to resize · normalized 0–1 coords on the
         <span id="canvas-size"></span> canvas.<br>
@@ -136,6 +139,16 @@
         <button id="close-modal" class="btn btn-ghost">Close</button>
       </div>
       <pre id="json-out" class="json-out"></pre>
+    </div>
+  </div>
+
+  <div id="pack-modal" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <span>pack.json — wiring</span>
+        <button id="close-pack-modal" class="btn btn-ghost">Close</button>
+      </div>
+      <div id="pack-out" class="pack-out"></div>
     </div>
   </div>
 

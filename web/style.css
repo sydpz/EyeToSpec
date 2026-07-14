@@ -753,6 +753,35 @@ code {
   color: #c8d0dc;
 }
 
+/* View pack.json panel: local pointer + resolved source, stacked. */
+.pack-out { overflow: auto; padding: 0.6rem 0; }
+.pack-block { padding: 0.5rem 1.1rem 0.9rem; }
+.pack-block + .pack-block { border-top: 1px solid var(--border); margin-top: 0.4rem; }
+.pack-block-head { font-weight: 600; font-size: 0.82rem; color: var(--text); margin-bottom: 0.35rem; }
+.pack-path {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.74rem; color: var(--text-dim, #9aa);
+  word-break: break-all; margin-bottom: 0.45rem;
+}
+.pack-path-missing { color: #e0806a; }
+.pack-warn { font-size: 0.82rem; color: #e0806a; }
+.pack-out .json-out { padding: 0.6rem 0.8rem; background: var(--bg, #0d0f14); border-radius: 6px; }
+
+/* View pack.json launcher (sidebar). */
+.viewpack-btn { width: 100%; }
+
+/* Inspector: the resolved final image file for an image element. */
+.insp-asset { margin-top: 0.5rem; }
+.insp-asset-label { display: block; font-size: 0.75rem; color: var(--text-dim, #9aa); margin-bottom: 0.2rem; }
+.insp-asset-path {
+  display: block;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.72rem; line-height: 1.4;
+  color: var(--accent, #7db3ff);
+  word-break: break-all; text-decoration: none;
+}
+.insp-asset-path:hover { text-decoration: underline; }
+
 /* ---- mobile ------------------------------------------------------------- */
 @media (max-width: 760px) {
   .tagline { display: none; }

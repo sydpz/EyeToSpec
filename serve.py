@@ -402,12 +402,21 @@ def build_manifest(pack_dir, raw):
             if isinstance(layer, dict):
                 _resolve_file(layer, layer.get("tex"), profiles)
 
+    # Absolute on-disk dir the resolved `file` paths hang off (<repo>/<resourceRoot>).
+    # Sent so the inspector can show an image element's real final file location —
+    # owner can eyeball whether a tex resolved to the right asset. None for
+    # hand-authored packs that serve from their own assets/ (front-end falls back).
+    repo, res = raw.get("repo"), raw.get("resourceRoot")
+    asset_root = _expand(os.path.join(repo, res)) \
+        if isinstance(repo, str) and isinstance(res, str) else None
+
     return {
         "name": raw.get("name", os.path.basename(pack_dir)),
         "description": raw.get("description", ""),
         "canvas": {"w": cw, "h": ch},
         "background": background,
         "elements": nodes,
+        "assetRoot": asset_root,
         # `env` = device-chrome components (phone frame + safe areas + wx capsule).
         # Declarative: whatever is configured gets drawn, absent → not drawn. Passed
         # through verbatim; the game公共库 ignores it (like `runtime`), it's an
@@ -515,6 +524,37 @@ def read_manifest(pack_id):
         raw = _resolve_source(pack_dir, raw)
         return build_manifest(pack_dir, raw)
     raise FileNotFoundError(manifest)
+
+
+def raw_pack_info(pack_id):
+    """Everything the "view pack.json" panel needs to confirm a pack's wiring:
+    the local pack.json verbatim (the on-disk pointer), and — if it references a
+    game-repo source — the resolved absolute source path plus that file's content.
+    A plain pack has source=None and the local text is the whole story."""
+    pack_dir = os.path.join(CONFIG_DIR, *pack_id.split("/"))
+    local_path = os.path.join(pack_dir, "pack.json")
+    if not os.path.isfile(local_path):
+        raise FileNotFoundError(local_path)
+    with open(local_path, "r", encoding="utf-8") as f:
+        local_text = f.read()
+    local_raw = json.loads(local_text)
+    src_path = _source_path(local_raw)
+    info = {
+        "localPath": _expand(local_path),
+        "local": local_text,
+        "source": None,
+    }
+    if src_path is not None:
+        source_text = None
+        if os.path.isfile(src_path):
+            with open(src_path, "r", encoding="utf-8") as f:
+                source_text = f.read()
+        info["source"] = {
+            "path": src_path,
+            "exists": os.path.isfile(src_path),
+            "content": source_text,
+        }
+    return info
 
 
 def is_safe_id(pack_id):
@@ -651,6 +691,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": "bad pack id"}, status=400)
             try:
                 return self.send_json(read_manifest(pack_id))
+            except FileNotFoundError:
+                return self.send_json({"error": "pack not found"}, status=404)
+            except json.JSONDecodeError as exc:
+                return self.send_json({"error": "invalid pack.json: %s" % exc}, status=500)
+
+        # Raw pack.json inspection: what's literally on disk (the local pointer) +,
+        # if it's a reference pack, the resolved source path + its content. Lets the
+        # owner confirm the pack connects to the right file before trusting a render.
+        if path.startswith("/api/rawpack/"):
+            pack_id = path[len("/api/rawpack/"):]
+            if not is_safe_id(pack_id):
+                return self.send_json({"error": "bad pack id"}, status=400)
+            try:
+                return self.send_json(raw_pack_info(pack_id))
             except FileNotFoundError:
                 return self.send_json({"error": "pack not found"}, status=404)
             except json.JSONDecodeError as exc:
