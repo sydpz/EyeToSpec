@@ -509,6 +509,10 @@ function frameYForAlign(align, frameH, canvasH) {
   switch (align) {
     case 'bottom':   return canvasH - frameH;
     case 'baseline': { const ly = anchorLineY(canvasH); return ly == null ? 0 : ly; }
+    // dialog: the frame is a fixed-ratio popup pinned to the SCREEN CENTER — it
+    // never re-flows, and on a taller screen the extra height splits evenly above
+    // and below (equal letterbox). Distinct from the three edge-extension aligns.
+    case 'dialog':   return Math.round((canvasH - frameH) / 2);
     case 'top':
     default:         return 0;
   }
@@ -1306,11 +1310,12 @@ function applyBgOverlay() {
   ov.style.background = hexAlpha(bg.overlay.fill || '#000000', bg.overlay.alpha);
 }
 
-// Three screen-extension directions (center removed: it's just baseline with the
-// line at 50%, so it added a redundant second way to say the same thing). top =
-// frame bites the canvas top, content extends DOWN; bottom = bites the bottom,
-// extends UP; baseline = frame top pins to the anchor-line, extends BOTH ways.
-const FRAME_ALIGNS = ['top', 'bottom', 'baseline'];
+// Frame align modes. top = frame bites the canvas top, content extends DOWN;
+// bottom = bites the bottom, extends UP; baseline = frame top pins to the
+// anchor-line, extends BOTH ways. dialog = a fixed-ratio popup pinned to the
+// SCREEN CENTER (never re-flows; taller screen letterboxes evenly) — the new
+// contract's replacement for the old special-cased `dialog` box.
+const FRAME_ALIGNS = ['top', 'bottom', 'baseline', 'dialog'];
 
 function renderFramePanel() {
   const panel = document.getElementById('frame-panel');
