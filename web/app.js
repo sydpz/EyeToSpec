@@ -1666,7 +1666,11 @@ function updateInspector() {
       const v = parseFloat(inp.value);
       if (isNaN(v)) return;
       if (k === 'h') { el.h = v; }
-      else { el[k] = v; if (k === 'w' && el._imgAspect) el.h = null; }
+      else { el[k] = v; }
+      // W/H are independent: setting W no longer resets an image's H to
+      // aspect-locked. An image whose H is still null keeps deriving H from W
+      // (aspect); once H is given an explicit value (inspector or drag) it
+      // stays put, so you can freely set W and H separately to stretch.
       placeNode(el);
     });
   });
