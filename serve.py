@@ -467,12 +467,52 @@ def list_packs():
     return {"packs": packs, "groups": groups}
 
 
+def _source_path(raw):
+    """Resolve a pack's `source` reference to an absolute path, or None if it
+    isn't a reference pack. `source` names the authoritative pack.json **relative
+    to `repo`** (same convention as assetProfiles/resourceRoot — one `repo`
+    anchor, half-paths hang off it), so switching worktrees just re-points
+    `repo`. An absolute `source` (leading "/" or "~") is honored as-is."""
+    src = raw.get("source")
+    if not isinstance(src, str) or not src:
+        return None
+    if src.startswith("/") or src.startswith("~"):
+        return _expand(src)
+    repo = raw.get("repo")
+    if not isinstance(repo, str):
+        raise FileNotFoundError(
+            "pack has `source` but no `repo` to resolve it against: %s" % src)
+    return _expand(os.path.join(repo, src))
+
+
+def _resolve_source(pack_dir, raw):
+    """Reference support: a pack.json may be a thin POINTER at the game repo's
+    live px config instead of carrying its own coordinate copy.
+
+    We load that referenced pack as the BASE, then shallow-overlay the local
+    pack's own keys on top (so the local pointer can add EyeToSpec-only fields —
+    repo/resourceRoot/assetProfiles — or patch a value without polluting the
+    game's clean px config). No `source` → raw is returned unchanged."""
+    src_path = _source_path(raw)
+    if src_path is None:
+        return raw
+    with open(src_path, "r", encoding="utf-8") as f:
+        base = json.load(f)
+    # Local keys win (overlay). `source` itself is dropped from the merged view.
+    merged = dict(base)
+    for k, v in raw.items():
+        if k != "source":
+            merged[k] = v
+    return merged
+
+
 def read_manifest(pack_id):
     pack_dir = os.path.join(CONFIG_DIR, *pack_id.split("/"))
     manifest = os.path.join(pack_dir, "pack.json")
     if os.path.isfile(manifest):
         with open(manifest, "r", encoding="utf-8") as f:
             raw = json.load(f)
+        raw = _resolve_source(pack_dir, raw)
         return build_manifest(pack_dir, raw)
     raise FileNotFoundError(manifest)
 
@@ -745,24 +785,45 @@ class Handler(BaseHTTPRequestHandler):
             # nested pack.json. Read disk as base so every untouched field
             # (repo/runtime/env/canvas/assetProfiles + unchanged elements) is
             # preserved verbatim; only diffed elements are changed/deleted/added.
-            pack_path = os.path.join(pack_dir, "pack.json")
+            #
+            # REFERENCE pack: if the local pack.json is a thin pointer (`source`),
+            # the coordinates live in the game repo's file — apply the diff THERE
+            # and write it back, so Save updates the single source of truth (not
+            # the pointer). Resource-resolution fields (repo/resourceRoot/
+            # assetProfiles) come from the local pointer, which the game file lacks.
+            local_path = os.path.join(pack_dir, "pack.json")
+            try:
+                with open(local_path, "r", encoding="utf-8") as f:
+                    local_raw = json.load(f)
+            except (OSError, json.JSONDecodeError) as e:
+                return self.send_json({"error": "cannot read pack.json: %s" % e},
+                                      status=500)
+            try:
+                src_path = _source_path(local_raw)
+            except FileNotFoundError as e:
+                return self.send_json({"error": str(e)}, status=500)
+            pack_path = src_path or local_path
             try:
                 with open(pack_path, "r", encoding="utf-8") as f:
                     raw = json.load(f, object_pairs_hook=collections.OrderedDict)
             except (OSError, json.JSONDecodeError) as e:
                 return self.send_json({"error": "cannot read pack.json: %s" % e},
                                       status=500)
-            # profiles for file->tex reverse lookup on rebuilt elements
+            # profiles for file->tex reverse lookup on rebuilt elements. For a
+            # reference pack these fields live on the pointer, not the game file.
             profiles = {}
-            prof_rel = raw.get("assetProfiles")
+            prof_rel = local_raw.get("assetProfiles") or raw.get("assetProfiles")
             if isinstance(prof_rel, str):
-                base = raw.get("repo")
+                base = local_raw.get("repo") or raw.get("repo")
                 prof_path = _expand(os.path.join(base, prof_rel)) \
                     if isinstance(base, str) else os.path.join(pack_dir, prof_rel)
                 profiles = _load_asset_profiles(prof_path)
             _apply_diff_to_pack(raw, diff, profiles)
-            # atomic write: temp file in the same dir, then rename over pack.json
-            fd, tmp = tempfile.mkstemp(dir=pack_dir, suffix=".tmp")
+            # atomic write: temp file in the SAME dir as the target (os.replace is
+            # only atomic within one filesystem), then rename over it. For a
+            # reference pack the target is the game repo's file, not pack_dir.
+            target_dir = os.path.dirname(pack_path)
+            fd, tmp = tempfile.mkstemp(dir=target_dir, suffix=".tmp")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(raw, f, ensure_ascii=False, indent=2)
@@ -776,7 +837,7 @@ class Handler(BaseHTTPRequestHandler):
             overlay = os.path.join(OUTPUT_DIR, pack_id + ".json")
             if os.path.isfile(overlay):
                 os.remove(overlay)
-            return self.send_json({"ok": True, "path": os.path.relpath(pack_path, ROOT)})
+            return self.send_json({"ok": True, "path": pack_path})
 
         return self.send_json({"error": "not found"}, status=404)
 
