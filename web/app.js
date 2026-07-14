@@ -920,6 +920,24 @@ function onPointerDown(e, el, node, mode) {
   if (mode === 'move' && selectedIds.size > 1) {
     drag.group = selectedElements().map(g => ({ el: g, x: g.x, y: g.y }));
   }
+  // Group resize: dragging the handle with 2+ selected scales the WHOLE set as
+  // one rigid body. Snapshot each member's start box + the group bounding box's
+  // top-left; onPointerMove derives a single scale factor from the dragged
+  // element's width change and rescales every member (size + position offset)
+  // around the pinned bbox corner — group relative layout stays proportional.
+  if (mode === 'resize' && selectedIds.size > 1) {
+    const members = selectedElements();
+    let bx = Infinity, by = Infinity;
+    for (const g of members) { bx = Math.min(bx, g.x); by = Math.min(by, g.y); }
+    drag.groupResize = {
+      bx, by,
+      members: members.map(g => ({
+        el: g, x: g.x, y: g.y, w: g.w,
+        h: g.h != null ? g.h : ((nodes.get(g.id)?.offsetHeight || 0) / S),
+        aspect: !!(g.file && g._imgAspect),
+      })),
+    };
+  }
   if (mode === 'rotate') {
     drag.startAngle = Math.atan2(e.clientY - drag.centerY, e.clientX - drag.centerX) * 180 / Math.PI;
   }
@@ -936,7 +954,22 @@ function onPointerMove(e) {
   const el = drag.el;
   const CW = (manifest.canvas && manifest.canvas.w) || 720;
 
-  if (drag.mode === 'resize') {
+  if (drag.mode === 'resize' && drag.groupResize) {
+    // Whole-group scale: one factor k from the dragged element's width change,
+    // applied to every member's size AND its offset from the group bbox corner
+    // (bx,by is pinned). Relative layout inside the group stays proportional.
+    const gr = drag.groupResize;
+    const k = clamp((drag.startW + dx) / (drag.startW || 1), 0.05, 40);
+    for (const m of gr.members) {
+      m.el.w = Math.max(4, m.w * k);
+      m.el.h = m.aspect ? null : Math.max(2, m.h * k);
+      m.el.x = gr.bx + (m.x - gr.bx) * k;
+      m.el.y = gr.by + (m.y - gr.by) * k;
+      placeNode(m.el);
+    }
+    updateInspector();
+    return;
+  } else if (drag.mode === 'resize') {
     // top-left pinned, grow down-right: width follows the drag directly (not ×2)
     el.w = clamp(drag.startW + dx, 4, CW * 4);
     if (el.file && el._imgAspect) {
